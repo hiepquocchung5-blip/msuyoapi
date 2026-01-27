@@ -1,0 +1,10 @@
+# Basic security for proof images folder
+# Prevent directory listing
+Options -Indexes
+
+# Allow access to images (needed for admin panels)
+# But prevent direct directory access
+<FilesMatch "\.(jpg|jpeg|png|gif)$">
+    Order Allow,Deny
+    Allow from all
+</FilesMatch>
