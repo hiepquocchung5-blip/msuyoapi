@@ -8,7 +8,7 @@
     # 2. CORS (Cross-Origin Resource Sharing)
     # Allows your Frontend to talk to this Backend from a different domain
     # In strict production, replace "*" with your specific frontend domain (e.g., https://suropara.com)
-    Header set Access-Control-Allow-Origin "*"
+    Header set Access-Control-Allow-Origin "https://m.suropara.com"
     Header set Access-Control-Allow-Methods "GET, POST, OPTIONS, PUT, DELETE"
     Header set Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With"
 
