@@ -2,8 +2,8 @@
     RewriteEngine On
 
     # 1. Handle Authorization Header (Critical for JWT/Bearer tokens)
-    RewriteCond %{HTTP:Authorization} .
-    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+    # RewriteCond %{HTTP:Authorization} .
+    # RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
 
     # 2. CORS (Cross-Origin Resource Sharing)
     # Allows your Frontend to talk to this Backend from a different domain
@@ -13,8 +13,8 @@
     Header set Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With"
 
     # 3. Handle Options pre-flight requests
-    RewriteCond %{REQUEST_METHOD} OPTIONS
-    RewriteRule ^(.*)$ $1 [R=200,L]
+    # RewriteCond %{REQUEST_METHOD} OPTIONS
+    # RewriteRule ^(.*)$ $1 [R=200,L]
 
     # 4. Clean URLs (Optional: removes .php extension requirements)
     # RewriteCond %{REQUEST_FILENAME} !-d
