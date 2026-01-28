@@ -1,0 +1,12 @@
+---
+deployment:
+  tasks:
+    - export DEPLOYPATH=/home/d0eo6547pca3/public_html/msuyo/api
+    - /bin/mkdir -p $DEPLOYPATH
+    - >
+      /bin/rsync -av --delete
+      --exclude='.git'
+      --exclude='.env'
+      --exclude='node_modules'
+      --exclude='.cpanel.yml'
+      ./ $DEPLOYPATH
