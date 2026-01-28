@@ -16,8 +16,11 @@ require_once __DIR__ . '/../config/db.php';
 
 // 2. Authentication Function
 function authenticate($pdo) {
-    $headers = apache_request_headers();
-    $authHeader = isset($headers['Authorization']) ? $headers['Authorization'] : '';
+    $authHeader =
+    $_SERVER['HTTP_AUTHORIZATION']
+    ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION']
+    ?? '';
+
     
     if (!preg_match('/Bearer\s(\S+)/', $authHeader, $matches)) {
         http_response_code(401);
