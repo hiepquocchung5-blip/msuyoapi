@@ -1,26 +1,48 @@
 <IfModule mod_rewrite.c>
     RewriteEngine On
 
-    # 1. Handle Authorization Header (Critical for JWT/Bearer tokens)
+    # ----------------------------------------------------------------------
+    # 1. FORCE HTTPS
+    # Redirects http:// to https://
+    # ----------------------------------------------------------------------
+    RewriteCond %{HTTPS} off
+    RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+    # ----------------------------------------------------------------------
+    # 2. FIX AUTHORIZATION HEADER
+    # Apache often strips the 'Authorization' header. This passes it to PHP $_SERVER.
+    # ----------------------------------------------------------------------
     RewriteCond %{HTTP:Authorization} .
     RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
 
-    # 2. CORS (Cross-Origin Resource Sharing)
-    # Allows your Frontend to talk to this Backend from a different domain
-    # In strict production, replace "*" with your specific frontend domain (e.g., https://suropara.com)
-    Header set Access-Control-Allow-Origin "https://m.suropara.com"
-    Header set Access-Control-Allow-Methods "GET, POST, OPTIONS, PUT, DELETE"
-    Header set Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With"
+    # ----------------------------------------------------------------------
+    # 3. CORS CONFIGURATION (Production)
+    # Strictly allows only your specific frontend domain.
+    # ----------------------------------------------------------------------
+    # Allow specific frontend domain
+    Header always set Access-Control-Allow-Origin "https://m.suropara.com"
+    
+    # Allowed methods
+    Header always set Access-Control-Allow-Methods "GET, POST, OPTIONS, PUT, DELETE"
+    
+    # Allowed headers
+    Header always set Access-Control-Allow-Headers "Content-Type, Access-Control-Allow-Headers, Authorization, X-Requested-With"
+    
+    # Allow cookies/credentials (Required if you use cookies or specific auth flows)
+    Header always set Access-Control-Allow-Credentials "true"
 
-    # 3. Handle Options pre-flight requests
+    # ----------------------------------------------------------------------
+    # 4. HANDLE PRE-FLIGHT (OPTIONS) REQUESTS
+    # Return 200 OK immediately for OPTIONS requests to satisfy CORS checks
+    # without hitting the PHP script logic.
+    # ----------------------------------------------------------------------
     RewriteCond %{REQUEST_METHOD} OPTIONS
     RewriteRule ^(.*)$ $1 [R=200,L]
 
-    # 4. Clean URLs (Optional: removes .php extension requirements)
-    # RewriteCond %{REQUEST_FILENAME} !-d
-    # RewriteCond %{REQUEST_FILENAME}\.php -f
-    # RewriteRule ^(.*)$ $1.php [L]
 </IfModule>
 
-# Security: Disable directory listing
+# ----------------------------------------------------------------------
+# 5. SECURITY
+# ----------------------------------------------------------------------
+# Disable directory browsing (prevents users from seeing list of files in /api/)
 Options -Indexes
