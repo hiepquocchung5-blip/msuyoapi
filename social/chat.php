@@ -2,7 +2,7 @@
 require_once __DIR__ . '/../utils/auth_middleware.php'; 
 require_once __DIR__ . '/../utils/security.php';
 
-header("Access-Control-Allow-Origin: https://m.api.suropara.com");
+header("Access-Control-Allow-Origin: https://m.suropara.com");
 header("Content-Type: application/json");
 
 $method = $_SERVER['REQUEST_METHOD'];
