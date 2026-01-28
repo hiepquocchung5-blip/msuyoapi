@@ -1,8 +1,9 @@
 <?php
 // Suropara API Entry Point (Health Check)
+require_once __DIR__ . '/../utils/auth_middleware.php'; 
 
 // Handle CORS
-header("Access-Control-Allow-Origin: *");
+header("Access-Control-Allow-Origin: https://m.api.suropara.com");
 header("Content-Type: application/json; charset=UTF-8");
 header("Access-Control-Allow-Methods: GET, OPTIONS");
 header("Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With");
