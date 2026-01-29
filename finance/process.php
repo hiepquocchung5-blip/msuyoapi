@@ -1,5 +1,5 @@
 <?php
-require_once __DIR__ . '/../../utils/admin_middleware.php'; 
+require_once __DIR__ . '/../utils/admin_middleware.php'; 
 
 // 1. Authenticate Admin (Must be FINANCE or GOD role)
 $admin = authenticateAdmin($pdo, 'FINANCE');

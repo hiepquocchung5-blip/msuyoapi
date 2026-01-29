@@ -37,6 +37,6 @@ function loadEnv($path) {
 }
 
 // Load from project root (assuming api/utils/ is 2 levels deep from root)
-$envPath = __DIR__ . '/.env';
+$envPath = __DIR__ . '/../.env';
 loadEnv($envPath);
 ?>

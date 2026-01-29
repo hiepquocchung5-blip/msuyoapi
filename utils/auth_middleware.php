@@ -2,7 +2,7 @@
 // api/utils/auth_middleware.php
 
 // 1. Handle CORS
-header("Access-Control-Allow-Origin: https://m.suropara.com");
+header("Access-Control-Allow-Origin: http://m.suropara.com");
 header("Access-Control-Allow-Credentials: true");
 header("Content-Type: application/json; charset=UTF-8");
 header("Access-Control-Allow-Methods: POST, GET, OPTIONS");
