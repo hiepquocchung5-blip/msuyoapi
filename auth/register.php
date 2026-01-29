@@ -1,26 +1,31 @@
 <?php
+// Fix CORS for public endpoint logic
+// Note: We removed the hardcoded header("Access-Control-Allow-Origin: ...") 
+// because the .htaccess file now handles it globally. 
+// Doubling up headers usually causes errors.
+
 require_once __DIR__ . '/../utils/auth_middleware.php'; 
 
-// Handle CORS if not handled by middleware for public endpoints
-header("Access-Control-Allow-Origin: https://m.api.suropara.com");
 header("Content-Type: application/json; charset=UTF-8");
-header("Access-Control-Allow-Methods: POST, OPTIONS");
-header("Access-Control-Allow-Headers: Content-Type, Access-Control-Allow-Headers, Authorization, X-Requested-With");
 
+// Handle Pre-flight request (OPTIONS)
+// Although .htaccess handles this, keeping this as a fallback is safe.
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);
     exit;
 }
 
+// Read Input
 $data = json_decode(file_get_contents("php://input"));
 
+// Validation
 if (!isset($data->phone) || !isset($data->password)) {
     http_response_code(400);
     echo json_encode(['error' => 'Phone and Password required']);
     exit;
 }
 
-// Check if user already exists
+// Check if user exists
 $stmt = $pdo->prepare("SELECT id FROM users WHERE phone = ?");
 $stmt->execute([$data->phone]);
 if ($stmt->fetch()) {
@@ -33,17 +38,15 @@ try {
     $pdo->beginTransaction();
 
     // 0. Fetch System Configuration
-    // We get the welcome bonus amount dynamically from the admin settings
     $stmtConfig = $pdo->prepare("SELECT value FROM system_settings WHERE key_name = 'welcome_bonus'");
     $stmtConfig->execute();
     $configBonus = $stmtConfig->fetchColumn();
 
-    // Use configured bonus or default to 0 if not set
     $startingBalance = ($configBonus !== false) ? (float)$configBonus : 0;
 
     // 1. Referral Logic
     $referrerId = null;
-    $referralBonus = 500;    // Extra per person
+    $referralBonus = 500;
 
     if (isset($data->ref_code) && !empty($data->ref_code)) {
         $refCode = strtoupper(trim($data->ref_code));
@@ -53,7 +56,7 @@ try {
         
         if ($referrer) {
             $referrerId = $referrer['id'];
-            $startingBalance += $referralBonus; // Bonus for new user
+            $startingBalance += $referralBonus; 
             
             // Reward Referrer
             $pdo->prepare("UPDATE users SET balance = balance + ?, commission_balance = commission_balance + ? WHERE id = ?")
@@ -67,10 +70,11 @@ try {
 
     // 2. Create User
     $passwordHash = password_hash($data->password, PASSWORD_DEFAULT);
-    $username = 'Player_' . substr($data->phone, -4);
-    $defaultIslands = json_encode([1, 2]); // Start with Vegas & Kohana
+    // Safer username generation
+    $username = 'Player_' . substr(preg_replace('/[^0-9]/', '', $data->phone), -4);
+    $defaultIslands = json_encode([1, 2]); 
     
-    // Generate unique referral code for this new user
+    // Generate unique referral code
     $newRefCode = strtoupper(substr(md5(uniqid(rand(), true)), 0, 8));
 
     $sql = "INSERT INTO users (phone, password_hash, username, owned_islands, balance, referral_code, referrer_id, active_pet_id) VALUES (?, ?, ?, ?, ?, ?, ?, 'luna')";
@@ -108,6 +112,8 @@ try {
 } catch (Exception $e) {
     if ($pdo->inTransaction()) $pdo->rollBack();
     http_response_code(500);
-    echo json_encode(['error' => 'Registration failed: ' . $e->getMessage()]);
+    // In production, log the actual error but show a generic one to the user
+    error_log($e->getMessage());
+    echo json_encode(['error' => 'Registration failed. Please try again.']);
 }
 ?>

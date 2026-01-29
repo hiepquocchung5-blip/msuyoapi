@@ -19,7 +19,7 @@ $charset = 'utf8mb4';
 
 // 3. API URL Configuration
 // Used for constructing image paths for the frontend/finance portal
-$apiUrl = getenv('API_PUBLIC_URL') ?: 'http://m.api.suropara.com';
+$apiUrl = getenv('API_PUBLIC_URL') ?: 'https://m.api.suropara.com';
 
 if (!defined('API_BASE_URL')) {
     define('API_BASE_URL', $apiUrl);
