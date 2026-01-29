@@ -10,11 +10,11 @@ if (file_exists($envLoaderPath)) {
 
 // 2. Database Credentials
 // Priority: Environment Variable -> Hardcoded Fallback (Your Local Settings)
-$host = getenv('DB_HOST') ?: 'localhost';
-$db   = getenv('DB_NAME') ?: 'msuro';
-$user = getenv('DB_USER') ?: 'myanamrsuyo';
+$host = getenv('DB_HOST') ;
+$db   = getenv('DB_NAME') ;
+$user = getenv('DB_USER') ;
 // Check specific false condition for password as it can be empty string
-$pass = getenv('DB_PASS') !== false ? getenv('DB_PASS') : 'Stephan2k03'; 
+$pass = getenv('DB_PASS') ; 
 $charset = 'utf8mb4';
 
 // 3. API URL Configuration
