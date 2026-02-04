@@ -1,23 +1,30 @@
 <IfModule mod_rewrite.c>
     RewriteEngine On
 
+    # 0. Force canonical API hostname (NO www)
+    RewriteCond %{HTTP_HOST} ^www\.api\.suropara\.com$ [NC]
+    RewriteRule ^(.*)$ https://api.suropara.com/$1 [L,R=301]
+
     # 1. Force HTTPS
     RewriteCond %{HTTPS} !=on
     RewriteCond %{HTTP:X-Forwarded-Proto} !=https
     RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
 
-    # 2. Handle Authorization Header
+    # 2. Preserve Authorization header
     RewriteCond %{HTTP:Authorization} .
     RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
 
-    # 3. Handle Pre-flight OPTIONS requests
+    # 3. Handle CORS preflight properly
     RewriteCond %{REQUEST_METHOD} OPTIONS
-    RewriteRule ^(.*)$ $1 [R=200,L]
+    RewriteRule ^(.*)$ $1 [L]
 
-    # 4. CORS Headers
+</IfModule>
+
+# 4. CORS headers
+<IfModule mod_headers.c>
     Header always set Access-Control-Allow-Origin "https://m.suropara.com"
     Header always set Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
-    Header always set Access-Control-Allow-Headers "Content-Type, Access-Control-Allow-Headers, Authorization, X-Requested-With"
+    Header always set Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With"
     Header always set Access-Control-Allow-Credentials "true"
 </IfModule>
 
