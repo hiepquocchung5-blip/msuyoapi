@@ -1,13 +1,6 @@
 ---
 deployment:
   tasks:
-    # 1. Define the target folder (Public API folder)
-    # Based on your logs, your username is zmmlpszw
-    - export DEPLOYPATH=/home/zmmlpszw/public_html/msuyo/api
-
-    # 2. Ensure the folder exists
+    - export DEPLOYPATH=/home/d0eo6547pca3/public_html/msuyoapi
     - /bin/mkdir -p $DEPLOYPATH
-
-    # 3. Copy files from the repository to the public folder
-    # We use rsync to copy everything EXCEPT hidden git files and local config
-    - /bin/rsync -av --delete --exclude='.git' --exclude='.cpanel.yml' --exclude='.env' ./ $DEPLOYPATH
+    - /bin/rsync -av --delete --exclude='.git*' ./ $DEPLOYPATH
