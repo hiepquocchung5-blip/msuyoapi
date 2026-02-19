@@ -10,16 +10,16 @@ if (file_exists($envLoaderPath)) {
 
 // 2. Database Credentials
 // Priority: Environment Variable -> Hardcoded Fallback (Your Local Settings)
-$host = getenv('DB_HOST') ?: 'localhost';
-$db   = getenv('DB_NAME') ?: 'suropara_myanmar_777';
-$user = getenv('DB_USER') ?: 'mm_suro_usr';
+$host = getenv('DB_HOST');
+$db   = getenv('DB_NAME') ;
+$user = getenv('DB_USER');
 // Check specific false condition for password as it can be empty string
-$pass = getenv('DB_PASS') ?: 'QwXHS7VapIJ4C8$9';
+$pass = getenv('DB_PASS');
 $charset = 'utf8mb4';
 
 // 3. API URL Configuration
 // Used for constructing image paths for the frontend/finance portal
-$apiUrl = getenv('API_PUBLIC_URL') ?: 'https://api.suropara.com/';
+$apiUrl = getenv('API_PUBLIC_URL') ?: 'https://apisuro.online/';
 
 if (!defined('API_BASE_URL')) {
     define('API_BASE_URL', $apiUrl);
