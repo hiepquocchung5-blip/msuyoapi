@@ -28,7 +28,11 @@ function loadEnv($path) {
             }
 
             if (!array_key_exists($name, $_SERVER) && !array_key_exists($name, $_ENV)) {
-                putenv(sprintf('%s=%s', $name, $value));
+                // Safely check if putenv is allowed on the server
+                if (function_exists('putenv')) {
+                    putenv(sprintf('%s=%s', $name, $value));
+                }
+                // Always set these, as they are what PHP mostly uses anyway
                 $_ENV[$name] = $value;
                 $_SERVER[$name] = $value;
             }
@@ -36,7 +40,7 @@ function loadEnv($path) {
     }
 }
 
-// Load from project root (assuming api/utils/ is 2 levels deep from root)
+// Load from project root (assuming api/utils/ is 1 or 2 levels deep from root depending on your setup)
 $envPath = __DIR__ . '/../.env';
 loadEnv($envPath);
 ?>
