@@ -8,18 +8,25 @@ if (file_exists($envLoaderPath)) {
     require_once $envLoaderPath;
 }
 
+// Helper to safely get env variables whether putenv is enabled or disabled
+function getEnvSafe($key, $default = null) {
+    if (isset($_ENV[$key])) return $_ENV[$key];
+    if (isset($_SERVER[$key])) return $_SERVER[$key];
+    $val = getenv($key);
+    return $val !== false ? $val : $default;
+}
+
 // 2. Database Credentials
 // Priority: Environment Variable -> Hardcoded Fallback (Your Local Settings)
 $host = getenv('DB_HOST');
 $db   = getenv('DB_NAME') ;
 $user = getenv('DB_USER');
-// Check specific false condition for password as it can be empty string
 $pass = getenv('DB_PASS');
 $charset = 'utf8mb4';
 
 // 3. API URL Configuration
 // Used for constructing image paths for the frontend/finance portal
-$apiUrl = getenv('API_PUBLIC_URL') ?: 'https://apisuro.online/';
+$apiUrl = getEnvSafe('API_PUBLIC_URL', 'https://apisuro.online/');
 
 if (!defined('API_BASE_URL')) {
     define('API_BASE_URL', $apiUrl);
@@ -55,14 +62,14 @@ try {
 if (session_status() === PHP_SESSION_NONE) {
     // Production Security Settings (Uncomment for HTTPS/Production)
     
-    if (getenv('APP_ENV') === 'production') {
+    if (getEnvSafe('APP_ENV') === 'production') {
         ini_set('session.cookie_secure', 1);
         ini_set('session.cookie_httponly', 1);
         ini_set('session.use_strict_mode', 1);
         session_set_cookie_params([
             'lifetime' => 86400,
             'path' => '/',
-            'domain' => getenv('COOKIE_DOMAIN') ?: '',
+            'domain' => getEnvSafe('COOKIE_DOMAIN') ?: '',
             'secure' => true,
             'httponly' => true
         ]);
