@@ -18,10 +18,10 @@ function getEnvSafe($key, $default = null) {
 
 // 2. Database Credentials
 // Priority: Environment Variable -> Hardcoded Fallback (Your Local Settings)
-$host = getenv('DB_HOST');
-$db   = getenv('DB_NAME') ;
-$user = getenv('DB_USER');
-$pass = getenv('DB_PASS');
+$host = getEnvSafe('DB_HOST');
+$db   = getEnvSafe('DB_NAME');
+$user = getEnvSafe('DB_USER');
+$pass = getEnvSafe('DB_PASS');
 $charset = 'utf8mb4';
 
 // 3. API URL Configuration
