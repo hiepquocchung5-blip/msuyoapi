@@ -4,17 +4,27 @@
 // Features: Strict RTP (15-40%), Active Events, Tournaments, Vaults, Anti-Cheat
 // ============================================================================
 
+// 1. Strict CORS & Preflight Handling for Production Domain
+header("Access-Control-Allow-Origin: https://suropara.com");
+header("Access-Control-Allow-Credentials: true");
+header("Content-Type: application/json; charset=UTF-8");
+header("Access-Control-Allow-Methods: POST, OPTIONS");
+header("Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With");
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
+// Corrected relative paths to the utils directory
 require_once __DIR__ . '/../utils/auth_middleware.php'; 
 require_once __DIR__ . '/../utils/security.php'; 
 
-header('Access-Control-Allow-Origin: https://suropara.com');
-header("Content-Type: application/json; charset=UTF-8");
-
-// 1. Authenticate User
+// 2. Authenticate User
 $user = authenticate($pdo);
 $userId = $user['id'];
 
-// 2. Strict Rate Limiting (0.8s cooldown)
+// 3. Strict Rate Limiting (0.8s cooldown)
 Security::rateLimit($pdo, $userId, 'spin', 0.8);
 
 $data = json_decode(file_get_contents("php://input"));
@@ -22,12 +32,16 @@ $betAmount = (int)($data->bet_amount ?? 0);
 $machineId = (int)($data->machine_id ?? 0);
 $clientToken = $data->session_token ?? ''; 
 
-// 3. Input & Bet Validation
-Security::validateBet($betAmount);
+// 4. Advanced Bet Validation (80 MMK to 5 Lakhs)
+$validBets = [80, 200, 500, 1000, 5000, 10000, 50000, 100000, 250000, 500000];
+if (!in_array($betAmount, $validBets)) {
+    http_response_code(400); 
+    echo json_encode(['error' => 'Invalid bet denomination detected.']); 
+    exit;
+}
 
 try {
-    // 4. INITIATE SECURE TRANSACTION
-    // Locks affected rows to prevent concurrent request exploits (Race Conditions)
+    // 5. INITIATE SECURE TRANSACTION (Pessimistic Locking)
     $pdo->beginTransaction();
 
     // Lock User Row
@@ -53,7 +67,7 @@ try {
         throw new Exception("Session synchronization error. Please sit down again.");
     }
 
-    // 5. Fetch Island Config & Active Events
+    // 6. Fetch Island Config & Active Events
     $stmtIsland = $pdo->prepare("SELECT rtp_rate, hostess_char_id FROM islands WHERE id = ?");
     $stmtIsland->execute([$machine['island_id']]);
     $island = $stmtIsland->fetch();
@@ -69,11 +83,11 @@ try {
     $winMultiplier = ($activeEvent && $activeEvent['type'] === 'WIN_MULTIPLIER') ? (float)$activeEvent['multiplier'] : 1.0;
     $xpMultiplier = ($activeEvent && $activeEvent['type'] === 'XP_BOOST') ? (float)$activeEvent['multiplier'] : 1.0;
 
-    // 6. Deduct Balance & Seed Jackpot
+    // 7. Deduct Balance & Seed Jackpot
     $pdo->prepare("UPDATE users SET balance = balance - ? WHERE id = ?")->execute([$betAmount, $userId]);
     $pdo->prepare("UPDATE global_jackpots SET current_amount = current_amount + ? WHERE name = 'GRAND SURO JACKPOT'")->execute([$betAmount * 0.01]);
 
-    // 7. PAYTABLE & GRID CONFIGURATION
+    // 8. PAYTABLE & GRID CONFIGURATION
     $payTable = [
         1 => 50,    // Jackpot/7
         2 => 20,    // High Tier
@@ -105,7 +119,7 @@ try {
         4 => [6, 4, 2]
     ];
 
-    // 8. RNG & WIN GENERATION
+    // 9. RNG & WIN GENERATION
     $rng = mt_rand(1, 10000) / 100; // 0.01 to 100.00
     $isHit = $rng <= $rtp;
 
@@ -174,7 +188,7 @@ try {
         }
     }
 
-    // 9. VAULT (PIGGY BANK) INTEGRATION
+    // 10. VAULT (PIGGY BANK) INTEGRATION
     // If win is massive (>50x bet), divert 10% to the Vault to encourage retention
     $vaultContribution = 0;
     if ($spinWin > ($betAmount * 50)) {
@@ -186,12 +200,12 @@ try {
             ->execute([$vaultContribution, $vaultContribution, $userId]);
     }
 
-    // 10. APPLY BALANCE UPDATES
+    // 11. APPLY BALANCE UPDATES
     if ($spinWin > 0) {
         $pdo->prepare("UPDATE users SET balance = balance + ? WHERE id = ?")->execute([$spinWin, $userId]);
     }
 
-    // 11. XP & PROGRESSION
+    // 12. XP & PROGRESSION
     $baseXp = floor($betAmount / 1000);
     $finalXp = $baseXp * $xpMultiplier;
     
@@ -202,18 +216,17 @@ try {
 
     $pdo->prepare("UPDATE users SET xp = xp + ? WHERE id = ?")->execute([$finalXp, $userId]);
 
-    // 12. TOURNAMENT TRACKING (If Active)
+    // 13. TOURNAMENT TRACKING (If Active)
     $stmtTourney = $pdo->prepare("SELECT tournament_id FROM tournament_entries WHERE user_id = ? AND tournament_id IN (SELECT id FROM tournaments WHERE status = 'active' AND start_time <= NOW() AND end_time > NOW())");
     $stmtTourney->execute([$userId]);
     $activeTourneys = $stmtTourney->fetchAll();
     
     foreach($activeTourneys as $t) {
-        // Increment spins used and add win to score
         $pdo->prepare("UPDATE tournament_entries SET spins_used = spins_used + 1, current_score = current_score + ? WHERE user_id = ? AND tournament_id = ?")
             ->execute([$spinWin + $vaultContribution, $userId, $t['tournament_id']]);
     }
 
-    // 13. LOGGING & ROTATE TOKEN
+    // 14. LOGGING & ROTATE TOKEN
     $nextToken = bin2hex(random_bytes(32));
     $pdo->prepare("UPDATE machines SET total_laps = total_laps + 1, total_payout = total_payout + ?, session_token = ?, last_played_at = NOW() WHERE id = ?")
         ->execute([$spinWin + $vaultContribution, $nextToken, $machineId]);
@@ -227,7 +240,7 @@ try {
     // Fetch absolute final balance
     $finalBal = $pdo->query("SELECT balance FROM users WHERE id = $userId")->fetchColumn();
 
-    // 14. RESPONSE
+    // 15. RESPONSE
     echo json_encode([
         'status' => 'success',
         'stops' => $result,
