@@ -15,7 +15,7 @@ declare(strict_types=1);
 // ----------------------------
 // CORS (frontend only)
 // ----------------------------
-header('Access-Control-Allow-Origin: https://m.suropara.com');
+header('Access-Control-Allow-Origin: https://suropara.com');
 header('Access-Control-Allow-Credentials: true');
 header('Access-Control-Allow-Methods: GET, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');

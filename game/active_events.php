@@ -1,7 +1,7 @@
 <?php
 require_once __DIR__ . '/../utils/auth_middleware.php'; 
 
-header("Access-Control-Allow-Origin: https://m.suropara.com");
+header("Access-Control-Allow-Origin: https://suropara.com");
 header("Content-Type: application/json");
 
 try {
