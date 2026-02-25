@@ -1,6 +1,6 @@
 <?php
-require_once __DIR__ . '/../utils/auth_middleware.php'; 
-require_once __DIR__ . '/../utils/security.php'; 
+require_once __DIR__ . '/../../utils/auth_middleware.php'; 
+require_once __DIR__ . '/../../utils/security.php'; 
 
 // 1. Authenticate User
 $user = authenticate($pdo);
@@ -57,34 +57,93 @@ try {
         }
     }
 
-    // 8. Slot RNG
-    $payTable = [1 => 100, 2 => 50, 3 => 20, 4 => 10, 5 => 5, 6 => 2, 7 => 0.5];
-    $winChance = $rtp * 20; 
-    $rng = rand(1, 10000);
-    $isLineWin = $rng <= $winChance;
-    $result = []; $spinWin = 0; $isTeaser = false;
+    // 8. 3x3 SLOT RNG ENGINE
+    // Paytable with micro-wins
+    $payTable = [
+        1 => 50,    // Big Bonus (7)
+        2 => 20,    // Reg Bonus
+        3 => 10,    // Bar
+        4 => 5,     // Bell
+        5 => 1,     // Watermelon
+        6 => 0.1,   // Cherry
+        7 => 0.01   // Replay / Junk (Micro Win)
+    ];
 
-    if ($isLineWin) {
-        $rand = rand(1, 100);
-        if ($rand <= 1) $sym = 1; elseif ($rand <= 3) $sym = 2; elseif ($rand <= 8) $sym = 3; 
-        elseif ($rand <= 15) $sym = 4; elseif ($rand <= 30) $sym = 5; elseif ($rand <= 55) $sym = 6; else $sym = 7;
-        $result = [$sym, $sym, $sym];
-        $spinWin = $betAmount * $payTable[$sym];
+    // Defined Paylines (Indices of 9-item array 0-8)
+    $paylines = [
+        0 => [0, 1, 2], // Top Row
+        1 => [3, 4, 5], // Middle Row
+        2 => [6, 7, 8], // Bottom Row
+        3 => [0, 4, 8], // Diagonal \
+        4 => [6, 4, 2]  // Diagonal /
+    ];
+
+    // Adjust win frequency for multiple lines
+    $winChance = $rtp * 4.5; // ~40-45% hit rate due to micro wins
+    $rng = rand(1, 10000);
+    $isHit = $rng <= $winChance;
+
+    $result = array_fill(0, 9, 0);
+    $winningLines = [];
+    $spinWin = 0;
+    $isTeaser = false;
+
+    if ($isHit) {
+        // Populate random grid first
+        for ($i=0; $i<9; $i++) $result[$i] = rand(1, 7);
         
+        // Force a win on 1 or 2 lines
+        $numLinesToWin = (rand(1, 100) > 85) ? 2 : 1;
+        $chosenLines = array_rand($paylines, $numLinesToWin);
+        if(!is_array($chosenLines)) $chosenLines = [$chosenLines];
+
+        foreach($chosenLines as $lineIdx) {
+            // Determine symbol for this line based on weights
+            $symRng = rand(1, 100);
+            if ($symRng <= 1) $sym = 1;         // 1%
+            elseif ($symRng <= 4) $sym = 2;     // 3%
+            elseif ($symRng <= 10) $sym = 3;    // 6%
+            elseif ($symRng <= 25) $sym = 4;    // 15%
+            elseif ($symRng <= 50) $sym = 5;    // 25%
+            elseif ($symRng <= 80) $sym = 6;    // 30%
+            else $sym = 7;                      // 20%
+
+            // Apply to grid
+            foreach($paylines[$lineIdx] as $pos) {
+                $result[$pos] = $sym;
+            }
+        }
+
+        // Recalculate exact payouts safely by scanning the final generated grid
+        $spinWin = 0;
+        foreach ($paylines as $idx => $line) {
+            if ($result[$line[0]] == $result[$line[1]] && $result[$line[1]] == $result[$line[2]]) {
+                $winningLines[] = $idx;
+                $spinWin += $betAmount * $payTable[$result[$line[0]]];
+            }
+        }
+        
+        // Security Alert for massive wins
         if ($spinWin > 500000) {
             $pdo->prepare("INSERT INTO security_alerts (user_id, risk_level, event_type, details) VALUES (?, 'medium', 'HIGH_WIN', ?)")
                 ->execute([$userId, "Won " . number_format($spinWin)]);
         }
+
     } else {
-        if (rand(1, 100) <= 30) {
+        // Force non-winning grid
+        do {
+            for($i=0; $i<9; $i++) $result[$i] = rand(1, 7);
+            $hasWin = false;
+            foreach($paylines as $l) {
+                if ($result[$l[0]] == $result[$l[1]] && $result[$l[1]] == $result[$l[2]]) {
+                    $hasWin = true; break;
+                }
+            }
+        } while($hasWin);
+        
+        // Teaser Detection (e.g. 2 out of 3 matching on middle row)
+        if ($result[3] == $result[4] && rand(1, 10) > 5) {
             $isTeaser = true;
-            $teaserSym = rand(1, 4); 
-            $missSym = ($teaserSym % 7) + 1; 
-            $result = [$teaserSym, $teaserSym, $missSym];
-        } else {
-            $r1 = rand(1, 7); $r2 = rand(1, 7);
-            do { $r3 = rand(1, 7); } while ($r3 === $r1);
-            $result = [$r1, $r2, $r3];
         }
     }
 
@@ -121,27 +180,9 @@ try {
         $pdo->prepare("UPDATE users SET xp = ? WHERE id = ?")->execute([$newXp, $userId]);
     }
 
-    // 12. TOURNAMENT LOGIC
-    // Check if user is in any active tournament
-    $stmtTourney = $pdo->prepare("
-        SELECT t.id, t.spin_limit, e.spins_used 
-        FROM tournaments t
-        JOIN tournament_entries e ON t.id = e.tournament_id
-        WHERE e.user_id = ? AND t.status = 'active' AND t.end_time > NOW()
-    ");
-    $stmtTourney->execute([$userId]);
-    $activeTourneys = $stmtTourney->fetchAll();
-
-    foreach ($activeTourneys as $t) {
-        if ($t['spins_used'] < $t['spin_limit']) {
-            // Update Score (Total Win) and Spin Count
-            $pdo->prepare("UPDATE tournament_entries SET current_score = current_score + ?, spins_used = spins_used + 1 WHERE tournament_id = ? AND user_id = ?")
-                ->execute([$totalWin, $t['id'], $userId]);
-        }
-    }
-
     // 13. Logging
     $pdo->prepare("UPDATE machines SET total_laps = total_laps + 1, total_payout = total_payout + ?, last_played_at = NOW() WHERE id = ?")->execute([$totalWin, $machineId]);
+    
     $pdo->prepare("INSERT INTO game_logs (user_id, machine_id, bet, win, result, xp_earned, is_gamble_win) VALUES (?, ?, ?, ?, ?, ?, 0)")->execute([$userId, $machineId, $betAmount, $totalWin, json_encode($result), $xpGain]);
 
     $pdo->commit();
@@ -151,6 +192,7 @@ try {
     echo json_encode([
         'status' => 'success',
         'stops' => $result,
+        'winning_lines' => $winningLines,
         'win_amount' => $totalWin,
         'new_balance' => (float)$finalBal,
         'xp_gained' => $xpGain,
