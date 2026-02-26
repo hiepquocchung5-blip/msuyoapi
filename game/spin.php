@@ -358,7 +358,9 @@ try {
     }
 
     $pdo->commit();
-    $finalBal = $pdo->query("SELECT balance FROM users WHERE id = $userId")->fetchColumn();
+    $stmtBal = $pdo->prepare("SELECT balance FROM users WHERE id = ?");
+    $stmtBal->execute([$userId]);
+    $finalBal = $stmtBal->fetchColumn();
 
     // --- PHASE 9: DATA PAYLOAD ---
     echo json_encode([
