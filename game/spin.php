@@ -12,7 +12,7 @@
 
 // --- CORS & PREFLIGHT CONFIG ---
 $allowedOrigin = "https://suropara.com";
-header("Access-Control-Allow-Origin: $allowedOrigin");
+header("Access-Control-Allow-Origin: *"); // Use $allowedOrigin in strict prod
 header("Access-Control-Allow-Methods: POST, GET, OPTIONS");
 header("Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With");
 header("Access-Control-Allow-Credentials: true");
@@ -20,7 +20,7 @@ header("Content-Type: application/json; charset=UTF-8");
 
 // Handle Preflight OPTIONS request
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    http_response_code(204); // No Content is standard for OPTIONS
+    http_response_code(204);
     exit;
 }
 
@@ -71,7 +71,7 @@ try {
     $freeSpins = (int)($machine['free_spins'] ?? 0);
     $lapsSinceBonus = (int)($machine['laps_since_bonus'] ?? 0); 
     $sessionSpins = (int)($machine['session_spins'] ?? 0);
-    $sessionWinStreak = (int)($machine['session_win_streak'] ?? 0); // NEW: Win Streak Tracker
+    $sessionWinStreak = (int)($machine['session_win_streak'] ?? 0);
 
     $isFreeSpin = ($freeSpins > 0 || $bonusSpinsLeft > 0);
     $actualBetDeducted = $isFreeSpin ? 0 : $betAmount;
@@ -105,14 +105,13 @@ try {
     $teaserChance = 30;
 
     // A. Volatility Engine adjustments
-    // High Volatility = Less frequent hits, but when it hits, the symbol weights shift to higher payouts
     if ($volatility === 'high') { $targetRtp -= 5.0; $teaserChance += 10; }
     if ($volatility === 'extreme') { $targetRtp -= 10.0; $teaserChance += 20; }
     if ($volatility === 'low') { $targetRtp += 5.0; $teaserChance -= 10; }
 
     // B. Momentum & Streak Multipliers
     $momentumMult = 1.0 + (min(10, floor($sessionSpins / 100)) * 0.1);
-    $streakMult = ($sessionWinStreak >= 3) ? 1.5 : 1.0; // 50% boost if on a 3+ win streak
+    $streakMult = ($sessionWinStreak >= 3) ? 1.5 : 1.0; 
 
     // C. VIP Scaling Boost
     $vipBoost = min(5.0, floor($freshUser['level'] / 10) * 0.5); 
@@ -128,12 +127,12 @@ try {
         $inZone = true; $targetRtp += 20.0; $teaserChance += 45; 
     }
 
-    // F. Hard Overrides (Heaven, Vampire, Mercy)
+    // F. Hard Overrides
     if ($bonusMode === 'HEAVEN') { $targetRtp = 85.0; $teaserChance = 10; } 
     elseif ($playerPnl < -200000) { $targetRtp = 12.0; $teaserChance = 75; } 
     elseif ($playerPnl > 1000000) { $targetRtp = 85.0; }
 
-    // G. Micro-Volatility Engine (+/- 2% noise)
+    // G. Micro-Volatility Engine
     $microVol = random_int(-20, 20) / 10.0;
     $targetRtp += $microVol;
 
@@ -145,18 +144,18 @@ try {
     $spinWin = 0;
     $isTeaser = false; $isReachEye = false; $isGrandJackpot = false; $isFreeze = false; $isSoftPity = false;
 
-    // 1. Long Freeze (1/65536)
+    // 1. Long Freeze
     if (!$isFreeSpin && !$bonusMode && random_int(1, 65536) <= (max(1, $betAmount / 5000))) $isFreeze = true;
 
-    // 2. Tenjo Ceiling (777 Spins)
+    // 2. Tenjo Ceiling
     $isTenjoHit = (!$isFreeSpin && !$bonusMode && $lapsSinceBonus >= 777);
 
-    // 3. Soft Pity (Guaranteed Replay/Cherry every 20 dead spins)
+    // 3. Soft Pity
     if (!$isHit && !$isFreeSpin && !$bonusMode && $lapsSinceBonus > 0 && ($lapsSinceBonus % 20 === 0)) {
         $isHit = true; $isSoftPity = true;
     }
 
-    // 4. Grand Jackpot (Bet-Weighted)
+    // 4. Grand Jackpot
     $jackpotOdds = max(200, (int)(100000000 / max(1, $betAmount))); 
     if (!$isFreeSpin && !$bonusMode && random_int(1, $jackpotOdds) === 1) {
         $stmtJp = $pdo->query("SELECT current_amount FROM global_jackpots WHERE name = 'GRAND SURO JACKPOT' FOR UPDATE");
@@ -181,7 +180,6 @@ try {
         if ($isFreeze) { $bonusMode = 'HEAVEN'; $bonusSpinsLeft = 32; }
     } elseif (!$isGrandJackpot) {
         if ($bonusSpinsLeft > 0 && $bonusMode !== 'HEAVEN') {
-            // AT MODE
             $winSym = (random_int(1, 100) > 80) ? 5 : 4; 
             for ($i=0; $i<9; $i++) $result[$i] = random_int(4, 7);
             $chosenLine = array_rand($paylines);
@@ -193,13 +191,11 @@ try {
             }
             $newFreeSpins = $freeSpins; 
         } else {
-            // NORMAL & HEAVEN MODE
             if ($bonusMode === 'HEAVEN') $bonusSpinsLeft--;
             if ($bonusSpinsLeft <= 0 && $bonusMode === 'HEAVEN') $bonusMode = null;
             $newFreeSpins = ($freeSpins > 0) ? $freeSpins - 1 : 0;
             
             if ($isHit) {
-                // Dynamic Volatility Symbol Weights [Symbol_ID, Weight]
                 if ($isSoftPity) { 
                     $allowed = [[7,70], [6,30]]; 
                 } elseif ($targetRtp <= 15.0) { 
@@ -208,13 +204,10 @@ try {
                     $allowed = [[7,50], [6,25], [4,15], [5,7], [3,3]]; 
                 } else {
                     if ($volatility === 'high' || $volatility === 'extreme') {
-                        // High Volatility: Top-heavy weights
                         $allowed = [[7,20], [6,15], [4,20], [5,20], [3,15], [2,7], [1,3]]; 
                     } elseif ($volatility === 'low') {
-                        // Low Volatility: Bottom-heavy weights
                         $allowed = [[7,50], [6,30], [4,10], [5,5], [3,4], [2,1], [1,0]]; 
                     } else {
-                        // Medium / Standard
                         $allowed = [[7,40], [6,25], [4,15], [5,10], [3,6], [2,3], [1,1]]; 
                     }
                 } 
@@ -233,7 +226,6 @@ try {
                     foreach($paylines[$chosenLine] as $pos) $result[$pos] = $winSym;
                 }
             } else {
-                // LOSS & TEASERS
                 do {
                     for($i=0; $i<9; $i++) $result[$i] = random_int(2, 7);
                     $hasWin = false;
@@ -271,21 +263,17 @@ try {
         }
     }
 
-    // Apply Active Multipliers
     $stmtEvent = $pdo->prepare("SELECT multiplier FROM marketing_events WHERE is_active = 1 AND start_time <= NOW() AND end_time > NOW() LIMIT 1");
     $stmtEvent->execute();
     $winMultiplier = $stmtEvent->fetchColumn() ?: 1.0;
     
-    // Calculate Final Liquid Win
     $spinWin = $basePayout * $momentumMult * $streakMult * $winMultiplier;
 
-    // Hard Cap Verification (Max Win limit per spin, excluding Jackpots)
     $maxAllowedWin = $betAmount * 5000;
     if ($spinWin > $maxAllowedWin && !$isGrandJackpot) {
         $spinWin = $maxAllowedWin;
     }
 
-    // Win Tier Categorization for Frontend UX (Sounds/VFX)
     $winTier = 'NONE';
     if ($spinWin > 0) {
         $multiplierCheck = $spinWin / max(1, $betAmount);
@@ -307,10 +295,8 @@ try {
     if ($spinWin > 0) {
         $totalEffectiveWin = $spinWin + $vaultSiphon;
         $pdo->prepare("UPDATE users SET balance = balance + ?, pnl_lifetime = pnl_lifetime - ? WHERE id = ?")->execute([$spinWin, $totalEffectiveWin, $userId]);
-        // Increment Streak
         $sessionWinStreak++;
     } else {
-        // Reset Streak on loss
         if (!$isFreeSpin && !$bonusMode) $sessionWinStreak = 0;
     }
     
@@ -328,7 +314,7 @@ try {
         $pdo->prepare("UPDATE users SET level = ?, balance = balance + ? WHERE id = ?")->execute([$newLevel, $reward, $userId]);
         $levelUpData = ['new_level' => $newLevel, 'reward' => $reward];
     }
-       $pdo->prepare("UPDATE users SET xp = ? WHERE id = ?")->execute([$currentXp, $userId]);
+    $pdo->prepare("UPDATE users SET xp = ? WHERE id = ?")->execute([$currentXp, $userId]);
 
     $lapsSinceBonus = ($bonusMode || $isGrandJackpot) ? 0 : $lapsSinceBonus + 1;
     $sessionSpins++;
@@ -337,7 +323,7 @@ try {
         ->execute([($spinWin + $vaultSiphon), $currentToken, $newFreeSpins, $bonusMode, $bonusSpinsLeft, $lapsSinceBonus, $sessionSpins, $sessionWinStreak, $machineId]);
     
     $pdo->prepare("INSERT INTO game_logs (user_id, machine_id, bet, win, result, xp_earned) VALUES (?, ?, ?, ?, ?, ?)")->execute([$userId, $machineId, $actualBetDeducted, $spinWin, json_encode($result), $xpGain]);
-    
+
     // --- PHASE 8: OMNI-TRACKER (Missions & Tournaments) ---
     try {
         $today = date('Y-m-d');
@@ -370,7 +356,7 @@ try {
         'stops' => $result, 
         'winning_lines' => $winningLines, 
         'win_amount' => $spinWin, 
-        'win_tier' => $winTier, // SMALL, BIG, MEGA, EPIC
+        'win_tier' => $winTier,
         'vaulted_amount' => $vaultSiphon,
         'new_balance' => (float)$finalBal, 
         'free_spins' => $newFreeSpins, 
