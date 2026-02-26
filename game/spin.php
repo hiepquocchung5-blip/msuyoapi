@@ -61,10 +61,11 @@ try {
     $stmtUser->execute([$userId]);
     $freshUser = $stmtUser->fetch();
 
-    $bonusMode = $machine['bonus_mode'];
-    $bonusSpinsLeft = (int)$machine['bonus_spins_left'];
-    $freeSpins = (int)$machine['free_spins'];
-    $lapsSinceBonus = (int)$machine['laps_since_bonus']; 
+    
+    $bonusMode = $machine['bonus_mode'] ?? null;
+    $bonusSpinsLeft = (int)($machine['bonus_spins_left'] ?? 0);
+    $freeSpins = (int)($machine['free_spins'] ?? 0);
+    $lapsSinceBonus = (int)($machine['laps_since_bonus'] ?? 0); 
     $sessionSpins = (int)($machine['session_spins'] ?? 0);
 
     $isFreeSpin = ($freeSpins > 0 || $bonusSpinsLeft > 0);
