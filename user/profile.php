@@ -1,16 +1,25 @@
 <?php
 require_once __DIR__ . '/../utils/auth_middleware.php'; 
 
-// Authenticate and get fresh user data from DB
 $user = authenticate($pdo);
+$userId = $user['id'];
 
-// Decode JSON fields for frontend consumption
+// Decode JSON fields
 $ownedIslands = json_decode($user['owned_islands']) ?? [];
 
-// Calculate progress to next level
-// Example formula: Next Level XP = Current Level * 100
+// Calculate Level Progress
 $nextLevelXp = $user['level'] * 100;
 $progressPercent = ($user['xp'] / $nextLevelXp) * 100;
+
+// NEW: Calculate Lifetime Deposits for Withdrawal Tiers
+$stmtDep = $pdo->prepare("SELECT SUM(amount) FROM transactions WHERE user_id = ? AND type = 'deposit' AND status = 'approved'");
+$stmtDep->execute([$userId]);
+$totalDeposited = (float)$stmtDep->fetchColumn();
+
+// Fetch Current Withdrawal Limit based on Deposit
+$stmtLimit = $pdo->prepare("SELECT max_withdraw FROM withdrawal_limits WHERE deposit_amount <= ? ORDER BY deposit_amount DESC LIMIT 1");
+$stmtLimit->execute([$totalDeposited]);
+$currentLimit = $stmtLimit->fetchColumn() ?: 0; // Default 0 if no deposits
 
 $response = [
     'status' => 'success',
@@ -26,6 +35,11 @@ $response = [
         'active_pet_id' => $user['active_pet_id'],
         'owned_islands' => $ownedIslands,
         'referral_code' => $user['referral_code'],
+        'gacha_pity' => (int)($user['gacha_pity'] ?? 0),
+        
+        // Financial Stats
+        'total_deposited' => $totalDeposited,
+        'current_withdraw_limit' => (float)$currentLimit
     ]
 ];
 

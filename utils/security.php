@@ -4,28 +4,25 @@
 class Security {
     
     // Rate Limiting (Token Bucket / Fixed Window)
-    // Updated: Default spin limit lowered to 0.8s for better gameplay flow
-    public static function rateLimit($pdo, $userId, $action = 'spin', $seconds = 0.8) {
-        // Skip rate limit for Admin testing users (Optional: IDs < 100)
+    // Supports 300ms Turbo Mode Spins
+    public static function rateLimit($pdo, $userId, $action = 'spin', $seconds = 0.3) {
+        // Skip rate limit for Admin testing users
         if ($userId < 100) return;
 
         if ($action === 'spin') {
-            // Check last spin time
             $stmt = $pdo->prepare("SELECT created_at FROM game_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT 1");
             $stmt->execute([$userId]);
             $lastSpin = $stmt->fetchColumn();
             
             if ($lastSpin) {
-                // Use microtime calculation if DB supports it, otherwise standard seconds
-                $timeSince = time() - strtotime($lastSpin);
+                $timeSince = microtime(true) - strtotime($lastSpin); // Microtime for sub-second precision
                 
-                // Block if trying to spin faster than the cooldown
                 if ($timeSince < $seconds) {
-                    http_response_code(429); // Too Many Requests
+                    http_response_code(429);
                     echo json_encode([
                         'status' => 'error',
-                        'error' => 'Spinning too fast', 
-                        'cooldown_remaining' => $seconds - $timeSince
+                        'error' => 'Engine cooling down. Spin too fast.', 
+                        'cooldown_remaining' => round($seconds - $timeSince, 2)
                     ]);
                     exit;
                 }
@@ -33,13 +30,24 @@ class Security {
         }
     }
 
-    // Anti-Tamper Check
-    // Ensures bet amounts match valid denominations
+    // Anti-Tamper Check for Valid Denominations
     public static function validateBet($amount) {
-        $validBets = [200, 500, 1000, 2000, 3000, 4000, 5000, 10000, 20000, 50000, 100000, 500000, 900000];
+        $validBets = [80, 100, 150, 200, 300, 500, 700, 850, 900, 1000, 5000, 10000, 50000, 100000, 250000, 500000];
         if (!in_array((int)$amount, $validBets)) {
             http_response_code(400);
-            echo json_encode(['error' => 'Invalid bet amount detected']);
+            echo json_encode(['error' => 'Invalid bet signature detected.']);
+            exit;
+        }
+    }
+
+    // Anomaly Detection: Catches identical bet spam or impossible win rates
+    public static function detectAnomalies($pdo, $userId, $betAmount) {
+        // Quick check: If user hit the 5000x cap recently, flag them.
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM security_alerts WHERE user_id = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)");
+        $stmt->execute([$userId]);
+        if ($stmt->fetchColumn() > 3) {
+            http_response_code(403);
+            echo json_encode(['error' => 'Account temporarily locked for security review.']);
             exit;
         }
     }

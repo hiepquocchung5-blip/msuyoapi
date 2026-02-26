@@ -1,5 +1,5 @@
 <?php
-require_once __DIR__ . '/../utils/auth_middleware.php'; 
+require_once __DIR__ . '/../../utils/auth_middleware.php'; 
 
 $user = authenticate($pdo);
 $userId = $user['id'];
@@ -19,29 +19,47 @@ if ($user['balance'] < $cost) {
 try {
     $pdo->beginTransaction();
 
-    // 1. Deduct Cost
-    $pdo->prepare("UPDATE users SET balance = balance - ? WHERE id = ?")->execute([$cost, $userId]);
+    // 1. Deduct Cost & Increment Pity
+    $pdo->prepare("UPDATE users SET balance = balance - ?, gacha_pity = gacha_pity + 1 WHERE id = ?")->execute([$cost, $userId]);
     $pdo->prepare("INSERT INTO transactions (user_id, type, amount, status, admin_note) VALUES (?, 'withdraw', ?, 'approved', 'Gacha Summon')")
         ->execute([$userId, $cost]);
+
+    // Fetch updated pity
+    $stmtPity = $pdo->prepare("SELECT gacha_pity FROM users WHERE id = ?");
+    $stmtPity->execute([$userId]);
+    $currentPity = (int)$stmtPity->fetchColumn();
 
     // 2. Fetch Pool (All Characters)
     // In a real app, you'd filter by 'is_in_pool' column
     $stmtChars = $pdo->query("SELECT * FROM characters");
     $allChars = $stmtChars->fetchAll(PDO::FETCH_ASSOC);
 
-    // 3. RNG Logic
-    // Rarity Weights: R=60%, SR=30%, SSR=9%, UR=1%
+    // 3. RNG Logic & Pity Trigger
     $rand = rand(1, 100);
     $rarity = 'R';
-    if ($type === 'premium') {
-        // Better odds for premium
-        if ($rand <= 5) $rarity = 'UR';
-        elseif ($rand <= 25) $rarity = 'SSR';
-        elseif ($rand <= 60) $rarity = 'SR';
+    
+    // THE SINGULARITY DRIVE (100 Pity UR Guarantee)
+    if ($currentPity >= 100) {
+        $rarity = 'UR';
+        $pdo->prepare("UPDATE users SET gacha_pity = 0 WHERE id = ?")->execute([$userId]);
+        $currentPity = 0;
     } else {
-        if ($rand <= 1) $rarity = 'UR';
-        elseif ($rand <= 10) $rarity = 'SSR';
-        elseif ($rand <= 40) $rarity = 'SR';
+        if ($type === 'premium') {
+            // Better odds for premium
+            if ($rand <= 5) $rarity = 'UR';
+            elseif ($rand <= 25) $rarity = 'SSR';
+            elseif ($rand <= 60) $rarity = 'SR';
+        } else {
+            if ($rand <= 1) $rarity = 'UR';
+            elseif ($rand <= 10) $rarity = 'SSR';
+            elseif ($rand <= 40) $rarity = 'SR';
+        }
+        
+        // Reset pity if they naturally pull a UR
+        if ($rarity === 'UR') {
+            $pdo->prepare("UPDATE users SET gacha_pity = 0 WHERE id = ?")->execute([$userId]);
+            $currentPity = 0;
+        }
     }
 
     // Filter pool by rolled rarity
@@ -85,7 +103,8 @@ try {
         'is_new' => !$isDuplicate,
         'rarity' => $rarity,
         'message' => $msg,
-        'new_balance' => (float)$newBal
+        'new_balance' => (float)$newBal,
+        'pity_count' => $currentPity
     ]);
 
 } catch (Exception $e) {
