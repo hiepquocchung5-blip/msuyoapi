@@ -5,17 +5,7 @@
 //           Dynamic Volatility, and Auto-Vault Siphoning.
 // ============================================================================
 
-header("Access-Control-Allow-Origin: https://suropara.com");
-header("Access-Control-Allow-Credentials: true");
-header("Content-Type: application/json; charset=UTF-8");
-header("Access-Control-Allow-Methods: POST, OPTIONS");
-header("Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With");
-
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    http_response_code(200);
-    exit;
-}
-
+// CORS is now strictly handled by auth_middleware.php to prevent "Multiple CORS Headers" 400 errors.
 require_once __DIR__ . '/../utils/auth_middleware.php'; 
 require_once __DIR__ . '/../utils/security.php'; 
 
@@ -26,13 +16,21 @@ $userId = $user['id'];
 Security::rateLimit($pdo, $userId, 'spin', 0.8);
 
 $data = json_decode(file_get_contents("php://input"));
+if (!$data) {
+    http_response_code(400); 
+    echo json_encode(['error' => 'Invalid JSON payload.']); 
+    exit;
+}
+
 $betAmount = (int)($data->bet_amount ?? 0);
 $machineId = (int)($data->machine_id ?? 0);
 $clientToken = $data->session_token ?? ''; 
 
 $validBets = [80, 200, 500, 1000, 5000, 10000, 50000, 100000, 250000, 500000];
 if (!in_array($betAmount, $validBets)) {
-    http_response_code(400); echo json_encode(['error' => 'Invalid bet denomination.']); exit;
+    http_response_code(400); 
+    echo json_encode(['error' => 'Invalid bet denomination.']); 
+    exit;
 }
 
 try {
@@ -43,20 +41,29 @@ try {
     $stmtM->execute([$machineId]);
     $machine = $stmtM->fetch();
 
-    if (!$machine || $machine['current_user_id'] !== $userId) throw new Exception("You are not seated at this machine.");
-    if ($machine['session_token'] !== $clientToken && $clientToken !== 'TEST_OVERRIDE') throw new Exception("Session sync error. Please re-seat.");
+    if (!$machine || $machine['current_user_id'] != $userId) throw new Exception("You are not seated at this machine.");
+    
+    // Fixed Session Token Race Condition for React AutoPlay:
+    // We strictly check the token, but we no longer rotate it on EVERY spin.
+    if ($machine['session_token'] !== $clientToken && $clientToken !== 'TEST_OVERRIDE') {
+        throw new Exception("Session sync error. Please re-seat.");
+    }
+    $currentToken = $machine['session_token']; // Keep it stable
 
     $stmtUser = $pdo->prepare("SELECT balance, xp, level, active_pet_id, pnl_lifetime, current_month_big_wins, tracking_month FROM users WHERE id = ? FOR UPDATE");
     $stmtUser->execute([$userId]);
     $freshUser = $stmtUser->fetch();
 
-    $isFreeSpin = (int)$machine['free_spins'] > 0;
+    // Extract Pachislot Modes
+    $bonusMode = $machine['bonus_mode'];
+    $bonusSpinsLeft = (int)$machine['bonus_spins_left'];
+    $freeSpins = (int)$machine['free_spins'];
+
+    // Fix 400 Error: AT Mode (Bonus) AND Replays are both considered "Free"
+    $isFreeSpin = ($freeSpins > 0 || $bonusSpinsLeft > 0);
     $actualBetDeducted = $isFreeSpin ? 0 : $betAmount;
 
     if ($freshUser['balance'] < $actualBetDeducted) throw new Exception("Insufficient balance.");
-
-    // Rotate Token
-    $nextToken = bin2hex(random_bytes(32));
     
     // Monthly Cap Reset
     $currentMonth = (int)date('Ym');
@@ -82,7 +89,6 @@ try {
     $isMonthlyBigWinCapped = ((int)$freshUser['current_month_big_wins'] >= 2);
     
     // Evaluate Session Momentum (Are they on a hot streak *right now*?)
-    // A fast query checking their last 50 spins. If they've won 5x their total bets recently, trigger CLAWBACK.
     $stmtSession = $pdo->prepare("SELECT SUM(win) as recent_win, SUM(bet) as recent_bet FROM (SELECT win, bet FROM game_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT 50) as recent");
     $stmtSession->execute([$userId]);
     $sessionMetrics = $stmtSession->fetch();
@@ -120,11 +126,8 @@ try {
     
     $isTeaser = false;
     $isReachEye = false; 
-    
-    $bonusMode = $machine['bonus_mode'];
-    $bonusSpinsLeft = (int)$machine['bonus_spins_left'];
-    $newFreeSpins = $isFreeSpin ? $machine['free_spins'] - 1 : 0;
 
+    // Handle spin states
     if ($bonusSpinsLeft > 0) {
         // AT MODE (Assist Time - Guaranteed Koyaku/Small Win)
         $winSym = (random_int(1, 100) > 80) ? 5 : 4; 
@@ -134,7 +137,13 @@ try {
         
         $bonusSpinsLeft--;
         if ($bonusSpinsLeft <= 0) $bonusMode = null; 
+        
+        // Preserve free spins during AT mode
+        $newFreeSpins = $freeSpins; 
     } else {
+        // Decrement standard Replay (Free Spins)
+        $newFreeSpins = ($freeSpins > 0) ? $freeSpins - 1 : 0;
+        
         // NORMAL SPIN
         if ($isHit) {
             // SYMBOL GATING
@@ -188,7 +197,6 @@ try {
                 $result[4] = $teaserSym;
                 
                 // Ensure the 3rd reel "slips" exactly one space visually
-                // If it's a 1 (7), we put it in position 2 (top) or 8 (bottom), leaving position 5 (middle) as a loser
                 $slipPosition = (random_int(0, 1) === 0) ? 2 : 8; 
                 $result[5] = ($teaserSym == 1) ? random_int(4, 7) : 7; // Break middle
                 $result[$slipPosition] = $teaserSym; // Put the matching symbol right next to it
@@ -236,8 +244,6 @@ try {
     $spinWin = $spinWin * $winMultiplier;
 
     // 5. VAULT SIPHONING (Anti-Withdrawal Tactic)
-    // If the user hits a massive win (> 50x bet), secretly lock 5% of it into their Piggy Bank Vault.
-    // They still "win" it, but they can't withdraw it until the weekend.
     $vaultSiphon = 0;
     if ($spinWin >= ($betAmount * 50)) {
         $vaultSiphon = $spinWin * 0.05;
@@ -251,7 +257,6 @@ try {
 
     // Apply Liquid Win & Correct PNL
     if ($spinWin > 0) {
-        // PNL is reduced by the total amount they effectively won (Liquid + Vaulted)
         $totalEffectiveWin = $spinWin + $vaultSiphon;
         $pdo->prepare("UPDATE users SET balance = balance + ?, pnl_lifetime = pnl_lifetime - ? WHERE id = ?")
             ->execute([$spinWin, $totalEffectiveWin, $userId]);
@@ -262,9 +267,9 @@ try {
 
     // Commit Machine State
     $pdo->prepare("UPDATE machines SET total_laps = total_laps + 1, total_payout = total_payout + ?, session_token = ?, free_spins = ?, bonus_mode = ?, bonus_spins_left = ?, last_played_at = NOW() WHERE id = ?")
-        ->execute([($spinWin + $vaultSiphon), $nextToken, $newFreeSpins, $bonusMode, $bonusSpinsLeft, $machineId]);
+        ->execute([($spinWin + $vaultSiphon), $currentToken, $newFreeSpins, $bonusMode, $bonusSpinsLeft, $machineId]);
     
-    // Log Game (Record liquid win)
+    // Log Game
     $pdo->prepare("INSERT INTO game_logs (user_id, machine_id, bet, win, result, xp_earned) VALUES (?, ?, ?, ?, ?, ?)")
         ->execute([$userId, $machineId, $actualBetDeducted, $spinWin, json_encode($result), $xpGain]);
 
@@ -282,13 +287,14 @@ try {
         'free_spins' => $newFreeSpins,
         'bonus_mode' => $bonusMode,
         'bonus_spins_left' => $bonusSpinsLeft,
-        'session_token' => $nextToken,
+        'session_token' => $currentToken,
         'is_teaser' => $isTeaser,
         'is_reach_eye' => $isReachEye
     ]);
 
 } catch (Exception $e) {
-    if ($pdo->inTransaction()) $pdo->rollBack();
-    http_response_code(400); echo json_encode(['error' => $e->getMessage()]);
+    if (isset($pdo) && $pdo->inTransaction()) $pdo->rollBack();
+    http_response_code(400); 
+    echo json_encode(['error' => $e->getMessage()]);
 }
 ?>
