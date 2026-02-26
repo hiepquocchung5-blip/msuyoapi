@@ -328,21 +328,16 @@ try {
         $pdo->prepare("UPDATE users SET level = ?, balance = balance + ? WHERE id = ?")->execute([$newLevel, $reward, $userId]);
         $levelUpData = ['new_level' => $newLevel, 'reward' => $reward];
     }
-    $pdo->prepare("UPDATE users SET xp = ? WHERE id = ?")->execute([$currentXp, $userId]);
+       $pdo->prepare("UPDATE users SET xp = ? WHERE id = ?")->execute([$currentXp, $userId]);
 
     $lapsSinceBonus = ($bonusMode || $isGrandJackpot) ? 0 : $lapsSinceBonus + 1;
     $sessionSpins++;
-
-    // Prevent columns from crashing if migration wasn't run completely, use dynamic update building
-    try {
-        $pdo->exec("ALTER TABLE machines ADD COLUMN IF NOT EXISTS session_win_streak INT DEFAULT 0");
-    } catch(Exception $e) {}
 
     $pdo->prepare("UPDATE machines SET total_laps = total_laps + 1, total_payout = total_payout + ?, session_token = ?, free_spins = ?, bonus_mode = ?, bonus_spins_left = ?, laps_since_bonus = ?, session_spins = ?, session_win_streak = ?, last_played_at = NOW() WHERE id = ?")
         ->execute([($spinWin + $vaultSiphon), $currentToken, $newFreeSpins, $bonusMode, $bonusSpinsLeft, $lapsSinceBonus, $sessionSpins, $sessionWinStreak, $machineId]);
     
     $pdo->prepare("INSERT INTO game_logs (user_id, machine_id, bet, win, result, xp_earned) VALUES (?, ?, ?, ?, ?, ?)")->execute([$userId, $machineId, $actualBetDeducted, $spinWin, json_encode($result), $xpGain]);
-
+    
     // --- PHASE 8: OMNI-TRACKER (Missions & Tournaments) ---
     try {
         $today = date('Y-m-d');

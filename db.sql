@@ -341,3 +341,52 @@ ALTER TABLE `machines`
 ADD COLUMN IF NOT EXISTS `last_ping_at` DATETIME NULL DEFAULT NULL,
 ADD COLUMN IF NOT EXISTS `last_client_ip` VARCHAR(45) NULL DEFAULT NULL;
 ADD COLUMN IF NOT EXISTS session_win_streak INT DEFAULT 0;
+
+-- ============================================================================
+-- SUROPARA DB PATCH: ADD MISSING VOLATILITY COLUMN & LEVEL CONFIGS
+-- Fixes SQLSTATE[42S22]: Unknown column 'volatility'
+-- Fixes SQLSTATE[42S02]: Table 'level_configs' doesn't exist
+-- ============================================================================
+
+-- 1. Add the column to the islands table safely
+ALTER TABLE `islands` 
+ADD COLUMN IF NOT EXISTS `volatility` ENUM('low', 'medium', 'high', 'extreme') DEFAULT 'medium';
+
+-- 2. Apply thematic volatility settings to your specific islands
+-- (This makes the UI in PlayView.js dynamic and affects the spin math)
+
+-- Low Volatility (Frequent small wins)
+UPDATE `islands` SET `volatility` = 'low' WHERE `id` IN (2, 7); -- Kohana Paradise, BioDome X
+
+-- Medium Volatility (Standard - The default, but let's be explicit for some)
+UPDATE `islands` SET `volatility` = 'medium' WHERE `id` IN (1, 5, 6, 9); -- SuroVegas, Glacia, Sky, Gold City
+
+-- High Volatility (Less frequent, but bigger payouts)
+UPDATE `islands` SET `volatility` = 'high' WHERE `id` IN (3, 4, 8); -- Inferna Atoll, Noctyra Isle, Cyber Slum
+
+-- Extreme Volatility (Very rare hits, massive jackpots)
+UPDATE `islands` SET `volatility` = 'extreme' WHERE `id` = 10; -- Void Station
+
+-- ==========================================
+-- 3. LEVELING SYSTEM (Fix for missing table)
+-- ==========================================
+
+CREATE TABLE IF NOT EXISTS `level_configs` (
+  `level` int(11) NOT NULL,
+  `xp_required` bigint(20) NOT NULL,
+  `reward_mmk` decimal(12, 2) DEFAULT 0.00,
+  PRIMARY KEY (`level`)
+);
+
+-- SEED DATA (Only insert if empty to avoid duplicates on re-run)
+INSERT IGNORE INTO `level_configs` (`level`, `xp_required`, `reward_mmk`) VALUES 
+(1, 0, 0), 
+(2, 100, 5000), 
+(3, 500, 10000), 
+(4, 2000, 50000),
+(5, 5000, 100000),
+(6, 10000, 250000),
+(7, 25000, 500000),
+(8, 50000, 1000000),
+(9, 100000, 2000000),
+(10, 200000, 50000000);
