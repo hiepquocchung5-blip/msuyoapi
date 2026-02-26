@@ -1835,3 +1835,29 @@ COMMIT;
 /*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
 /*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
+
+-- DAILY MISSIONS SYSTEM
+
+CREATE TABLE IF NOT EXISTS `daily_missions` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `action_type` VARCHAR(50) NOT NULL, -- 'spin', 'win_total', 'play_specific'
+  `target_val` INT NOT NULL,
+  `reward_mmk` INT NOT NULL,
+  `description` VARCHAR(255) NOT NULL,
+  `is_active` TINYINT(1) DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS `user_mission_progress` (
+  `user_id` BIGINT(20) UNSIGNED NOT NULL,
+  `mission_id` INT NOT NULL,
+  `progress` INT DEFAULT 0,
+  `is_claimed` TINYINT(1) DEFAULT 0,
+  `tracking_date` DATE NOT NULL,
+  PRIMARY KEY (`user_id`, `mission_id`, `tracking_date`)
+);
+
+-- Seed Default Missions
+INSERT INTO `daily_missions` (`action_type`, `target_val`, `reward_mmk`, `description`) VALUES
+('spin', 50, 2000, 'Spin the reels 50 times today.'),
+('win_total', 50000, 5000, 'Win a total of 50,000 MMK.'),
+('spin', 200, 10000, 'Hardcore: Spin 200 times today.');

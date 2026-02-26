@@ -1,10 +1,9 @@
 <?php
 // ============================================================================
-// SUROPARA V2 - CORE SLOT ENGINE (3x3 Grid)
-// Features: Strict RTP (15-40%), Active Events, Tournaments, Vaults, Anti-Cheat
+// SUROPARA V2 - PACHISLOT ENGINE & PROFIT MAXIMIZER
+// Features: Whale Tracking, 80% Golden Windows, Teaser Manipulation
 // ============================================================================
 
-// 1. Strict CORS & Preflight Handling for Production Domain
 header("Access-Control-Allow-Origin: https://suropara.com");
 header("Access-Control-Allow-Credentials: true");
 header("Content-Type: application/json; charset=UTF-8");
@@ -16,15 +15,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit;
 }
 
-// Corrected relative paths to the utils directory
 require_once __DIR__ . '/../utils/auth_middleware.php'; 
 require_once __DIR__ . '/../utils/security.php'; 
 
-// 2. Authenticate User
+// 1. Auto-Migrate Psychological Tracker Columns
+try {
+    $pdo->exec("ALTER TABLE users 
+        ADD COLUMN IF NOT EXISTS lifetime_wager DECIMAL(20,2) DEFAULT 0.00, 
+        ADD COLUMN IF NOT EXISTS lucky_sessions_used INT DEFAULT 0, 
+        ADD COLUMN IF NOT EXISTS lucky_week_start DATE DEFAULT NULL");
+} catch (Exception $e) {}
+
 $user = authenticate($pdo);
 $userId = $user['id'];
 
-// 3. Strict Rate Limiting (0.8s cooldown)
 Security::rateLimit($pdo, $userId, 'spin', 0.8);
 
 $data = json_decode(file_get_contents("php://input"));
@@ -32,235 +36,215 @@ $betAmount = (int)($data->bet_amount ?? 0);
 $machineId = (int)($data->machine_id ?? 0);
 $clientToken = $data->session_token ?? ''; 
 
-// 4. Advanced Bet Validation (80 MMK to 5 Lakhs)
 $validBets = [80, 200, 500, 1000, 5000, 10000, 50000, 100000, 250000, 500000];
 if (!in_array($betAmount, $validBets)) {
-    http_response_code(400); 
-    echo json_encode(['error' => 'Invalid bet denomination detected.']); 
-    exit;
+    http_response_code(400); echo json_encode(['error' => 'Invalid bet denomination.']); exit;
 }
 
 try {
-    // 5. INITIATE SECURE TRANSACTION (Pessimistic Locking)
     $pdo->beginTransaction();
 
-    // Lock User Row
-    $stmtUser = $pdo->prepare("SELECT balance, xp, level, active_pet_id FROM users WHERE id = ? FOR UPDATE");
-    $stmtUser->execute([$userId]);
-    $freshUser = $stmtUser->fetch();
-
-    if ($freshUser['balance'] < $betAmount) {
-        throw new Exception("Insufficient balance.");
-    }
-
-    // Lock Machine Row
-    $stmtM = $pdo->prepare("SELECT island_id, current_user_id, session_token FROM machines WHERE id = ? FOR UPDATE");
+    $stmtM = $pdo->prepare("SELECT * FROM machines WHERE id = ? FOR UPDATE");
     $stmtM->execute([$machineId]);
     $machine = $stmtM->fetch();
 
-    if (!$machine || $machine['current_user_id'] !== $userId) {
-        throw new Exception("You are not seated at this machine.");
+    if (!$machine || $machine['current_user_id'] !== $userId) throw new Exception("You are not seated at this machine.");
+    
+    $stmtUser = $pdo->prepare("SELECT balance, xp, level, active_pet_id, lifetime_wager, lucky_sessions_used, lucky_week_start FROM users WHERE id = ? FOR UPDATE");
+    $stmtUser->execute([$userId]);
+    $freshUser = $stmtUser->fetch();
+
+    $isFreeSpin = (int)$machine['free_spins'] > 0;
+    $actualBetDeducted = $isFreeSpin ? 0 : $betAmount;
+
+    if ($freshUser['balance'] < $actualBetDeducted) throw new Exception("Insufficient balance.");
+
+    $nextToken = bin2hex(random_bytes(32));
+    
+    if ($actualBetDeducted > 0) {
+        // Update Balance and Tracker
+        $pdo->prepare("UPDATE users SET balance = balance - ?, lifetime_wager = lifetime_wager + ? WHERE id = ?")->execute([$actualBetDeducted, $actualBetDeducted, $userId]);
+        $pdo->prepare("UPDATE global_jackpots SET current_amount = current_amount + ? WHERE name = 'GRAND SURO JACKPOT'")->execute([$actualBetDeducted * 0.01]);
     }
+
+    // --- ALGORITHM: PROFIT MAXIMIZATION ENGINE ---
     
-    // Anti-Replay Token Check
-    if ($machine['session_token'] !== $clientToken && $clientToken !== 'TEST_OVERRIDE') {
-        throw new Exception("Session synchronization error. Please sit down again.");
+    $currentWeekStart = date('Y-m-d', strtotime('monday this week'));
+    $luckySessionsUsed = $freshUser['lucky_sessions_used'];
+    
+    // Reset weekly tracker if it's a new week
+    if ($freshUser['lucky_week_start'] !== $currentWeekStart) {
+        $luckySessionsUsed = 0;
+        $pdo->prepare("UPDATE users SET lucky_week_start = ?, lucky_sessions_used = 0 WHERE id = ?")->execute([$currentWeekStart, $userId]);
     }
 
-    // 6. Fetch Island Config & Active Events
-    $stmtIsland = $pdo->prepare("SELECT rtp_rate, hostess_char_id FROM islands WHERE id = ?");
-    $stmtIsland->execute([$machine['island_id']]);
-    $island = $stmtIsland->fetch();
+    $isHighRoller = ($freshUser['lifetime_wager'] + $actualBetDeducted) >= 100000; // 1 Lakh threshold
     
-    // Strict RTP bounds (15% to 40% as requested)
-    $rtp = max(15.0, min(40.0, (float)$island['rtp_rate']));
+    // Default RTP configuration
+    $targetRtp = 40.0; // Hard cap at 40% normally
+    $teaserChance = 30; // 30% chance to show a near-miss on a loss
+    $isGoldenWindow = false;
 
-    // Check for Active Multiplier Events
-    $stmtEvent = $pdo->prepare("SELECT multiplier, type FROM marketing_events WHERE is_active = 1 AND start_time <= NOW() AND end_time > NOW() AND (target_island_id IS NULL OR target_island_id = ?) LIMIT 1");
-    $stmtEvent->execute([$machine['island_id']]);
-    $activeEvent = $stmtEvent->fetch();
-    
-    $winMultiplier = ($activeEvent && $activeEvent['type'] === 'WIN_MULTIPLIER') ? (float)$activeEvent['multiplier'] : 1.0;
-    $xpMultiplier = ($activeEvent && $activeEvent['type'] === 'XP_BOOST') ? (float)$activeEvent['multiplier'] : 1.0;
+    // Golden Window Logic (Twice a week, spike to 80%)
+    if ($luckySessionsUsed < 2) {
+        // 5% chance per spin to trigger a "Golden Session" if they haven't used both this week
+        if (mt_rand(1, 100) <= 5) {
+            $isGoldenWindow = true;
+            $targetRtp = 80.0;
+            // Mark a session as used
+            $pdo->prepare("UPDATE users SET lucky_sessions_used = lucky_sessions_used + 1 WHERE id = ?")->execute([$userId]);
+        }
+    }
 
-    // 7. Deduct Balance & Seed Jackpot
-    $pdo->prepare("UPDATE users SET balance = balance - ? WHERE id = ?")->execute([$betAmount, $userId]);
-    $pdo->prepare("UPDATE global_jackpots SET current_amount = current_amount + ? WHERE name = 'GRAND SURO JACKPOT'")->execute([$betAmount * 0.01]);
+    // Whale Extractor Logic
+    if ($isHighRoller && !$isGoldenWindow) {
+        // They spend a lot. Tighten the RTP slightly to extract profit, but MAXIMIZE teasers to keep them addicted.
+        $targetRtp = 35.0; 
+        $teaserChance = 80; // 80% of their losses will look like they "almost" won a jackpot
+    }
 
-    // 8. PAYTABLE & GRID CONFIGURATION
-    $payTable = [
-        1 => 50,    // Jackpot/7
-        2 => 20,    // High Tier
-        3 => 10,    // Mid Tier
-        4 => 5,     // Bell
-        5 => 1,     // Watermelon
-        6 => 0.1,   // Cherry
-        7 => 0.01   // Micro Win (Dust)
-    ];
+    // --- END PROFIT ENGINE ---
 
-    /* 3x3 GRID INDICES:
-      0  1  2
-      3  4  5
-      6  7  8
-      
-      REQUESTED PAYLINES: 
-      1,2,3 (Top) -> [0, 1, 2]
-      4,5,6 (Mid) -> [3, 4, 5]
-      7,8,9 (Bot) -> [6, 7, 8]
-      1,5,9 (Diag \) -> [0, 4, 8]
-      7,5,3 (Diag /) -> [6, 4, 2]
-      EXCLUDED: Vertical 2,5,8 -> [1, 4, 7]
-    */
-    $paylines = [
-        0 => [0, 1, 2],
-        1 => [3, 4, 5],
-        2 => [6, 7, 8],
-        3 => [0, 4, 8],
-        4 => [6, 4, 2]
-    ];
+    // Active Events
+    $stmtEvent = $pdo->prepare("SELECT multiplier FROM marketing_events WHERE is_active = 1 AND start_time <= NOW() AND end_time > NOW() LIMIT 1");
+    $stmtEvent->execute();
+    $winMultiplier = $stmtEvent->fetchColumn() ?: 1.0;
 
-    // 9. RNG & WIN GENERATION
-    $rng = mt_rand(1, 10000) / 100; // 0.01 to 100.00
-    $isHit = $rng <= $rtp;
-
+    $paylines = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 4, 8], [6, 4, 2]];
     $result = array_fill(0, 9, 0);
     $winningLines = [];
     $spinWin = 0;
-    $isTeaser = false;
+    
+    $bonusMode = $machine['bonus_mode'];
+    $bonusSpinsLeft = (int)$machine['bonus_spins_left'];
+    $newFreeSpins = $isFreeSpin ? $machine['free_spins'] - 1 : 0;
 
-    if ($isHit) {
-        // Dynamic Symbol Gating based on exact RTP
-        if ($rtp <= 15.0) {
-            $allowedSymbols = [['sym'=>7, 'wt'=>70], ['sym'=>6, 'wt'=>25], ['sym'=>5, 'wt'=>4], ['sym'=>4, 'wt'=>1]];
-        } elseif ($rtp <= 25.0) {
-            $allowedSymbols = [['sym'=>7, 'wt'=>50], ['sym'=>6, 'wt'=>30], ['sym'=>5, 'wt'=>12], ['sym'=>4, 'wt'=>5], ['sym'=>3, 'wt'=>3]];
-        } elseif ($rtp <= 35.0) {
-            $allowedSymbols = [['sym'=>7, 'wt'=>40], ['sym'=>6, 'wt'=>30], ['sym'=>5, 'wt'=>15], ['sym'=>4, 'wt'=>10], ['sym'=>3, 'wt'=>4], ['sym'=>2, 'wt'=>1]];
-        } else {
-            $allowedSymbols = [['sym'=>7, 'wt'=>35], ['sym'=>6, 'wt'=>25], ['sym'=>5, 'wt'=>20], ['sym'=>4, 'wt'=>10], ['sym'=>3, 'wt'=>5], ['sym'=>2, 'wt'=>4], ['sym'=>1, 'wt'=>1]];
-        }
-
-        // Weighted random selection
-        $totalWeight = array_sum(array_column($allowedSymbols, 'wt'));
-        $randWeight = mt_rand(1, $totalWeight);
-        $currentWeight = 0;
-        $winSym = 7;
-        foreach ($allowedSymbols as $as) {
-            $currentWeight += $as['wt'];
-            if ($randWeight <= $currentWeight) { $winSym = $as['sym']; break; }
-        }
-
-        // Fill grid with noise (ensuring no accidental wins)
+    // RNG GENERATION
+    if ($bonusSpinsLeft > 0) {
+        // AT MODE
+        $winSym = (mt_rand(1, 100) > 80) ? 5 : 4; 
         for ($i=0; $i<9; $i++) $result[$i] = mt_rand(4, 7);
-        
-        // Inject win into 1 random valid line
         $chosenLine = array_rand($paylines);
-        foreach($paylines[$chosenLine] as $pos) {
-            $result[$pos] = $winSym;
-        }
-
-        // Calculate exact payout
-        foreach ($paylines as $idx => $line) {
-            if ($result[$line[0]] == $result[$line[1]] && $result[$line[1]] == $result[$line[2]]) {
-                $winningLines[] = $idx;
-                $spinWin += $betAmount * $payTable[$result[$line[0]]];
-            }
-        }
+        foreach($paylines[$chosenLine] as $pos) $result[$pos] = $winSym;
         
-        // Apply Global Event Multiplier
-        $spinWin = $spinWin * $winMultiplier;
-
+        $bonusSpinsLeft--;
+        if ($bonusSpinsLeft <= 0) $bonusMode = null; 
     } else {
-        // Generate Guaranteed Loss Grid
-        do {
-            for($i=0; $i<9; $i++) $result[$i] = mt_rand(2, 7);
-            $hasWin = false;
-            foreach($paylines as $l) {
-                if ($result[$l[0]] == $result[$l[1]] && $result[$l[1]] == $result[$l[2]]) {
-                    $hasWin = true; break;
-                }
+        // NORMAL SPIN USING DYNAMIC RTP
+        $rng = mt_rand(1, 10000) / 100;
+        $isHit = $rng <= $targetRtp;
+
+        if ($isHit) {
+            // Symbol generation based on RTP tightness
+            if ($targetRtp <= 35.0) { 
+                $allowed = [[7,60], [6,30], [4,8], [5,2]]; // Very tight (Whale state)
+            } elseif ($targetRtp == 80.0) { 
+                $allowed = [[7,30], [6,20], [4,20], [5,15], [3,10], [1,5]]; // Golden Window (Loose)
+            } else { 
+                $allowed = [[7,45], [6,30], [4,15], [5,5], [3,3], [1,2]]; // Standard 40%
+            } 
+
+            $totalW = array_sum(array_column($allowed, 1));
+            $randW = mt_rand(1, $totalW);
+            $currW = 0; $winSym = 7;
+            foreach ($allowed as $a) {
+                $currW += $a[1];
+                if ($randW <= $currW) { $winSym = $a[0]; break; }
             }
-        } while($hasWin);
-        
-        // Teaser Generation (Near Miss on Mid Row)
-        if ($result[3] == $result[4] && mt_rand(1, 10) > 6) {
-            $isTeaser = true;
+
+            for ($i=0; $i<9; $i++) $result[$i] = mt_rand(2, 7); 
+            $chosenLine = array_rand($paylines);
+            
+            if ($winSym === 1) {
+                if (mt_rand(1, 100) > 30) {
+                    foreach($paylines[$chosenLine] as $pos) $result[$pos] = 1;
+                } else {
+                    $result[$paylines[$chosenLine][0]] = 1;
+                    $result[$paylines[$chosenLine][1]] = 1;
+                    $result[$paylines[$chosenLine][2]] = 3;
+                }
+            } else {
+                foreach($paylines[$chosenLine] as $pos) $result[$pos] = $winSym;
+            }
+        } else {
+            // FORCED LOSS
+            do {
+                for($i=0; $i<9; $i++) $result[$i] = mt_rand(2, 7);
+                $hasWin = false;
+                foreach($paylines as $l) {
+                    if ($result[$l[0]] == $result[$l[1]] && $result[$l[1]] == $result[$l[2]]) { $hasWin = true; break; }
+                }
+            } while($hasWin);
+
+            // TEASER GENERATION (Psychological Hook)
+            if (mt_rand(1, 100) <= $teaserChance) {
+                // Force a near miss on the middle row
+                $teaserSym = (mt_rand(1,100) > 90) ? 1 : 3; // 10% chance to tease a Jackpot 7
+                $result[3] = $teaserSym;
+                $result[4] = $teaserSym;
+                // Ensure 3rd symbol doesn't match
+                $result[5] = ($teaserSym == 1) ? 3 : 7; 
+                $isTeaser = true;
+            }
         }
     }
 
-    // 10. VAULT (PIGGY BANK) INTEGRATION
-    // If win is massive (>50x bet), divert 10% to the Vault to encourage retention
-    $vaultContribution = 0;
-    if ($spinWin > ($betAmount * 50)) {
-        $vaultContribution = $spinWin * 0.10;
-        $spinWin -= $vaultContribution;
+    // EVALUATION
+    if (in_array(6, [$result[0], $result[3], $result[6]])) {
+        $spinWin += $betAmount * 2; 
+        $winningLines[] = 99; 
+    }
+
+    foreach ($paylines as $idx => $line) {
+        $s1 = $result[$line[0]]; $s2 = $result[$line[1]]; $s3 = $result[$line[2]];
         
-        $pdo->prepare("INSERT IGNORE INTO user_vaults (user_id) VALUES (?)")->execute([$userId]);
-        $pdo->prepare("UPDATE user_vaults SET balance = balance + ?, total_saved = total_saved + ? WHERE user_id = ?")
-            ->execute([$vaultContribution, $vaultContribution, $userId]);
+        if ($s1 == $s2 && $s2 == $s3) {
+            $winningLines[] = $idx;
+            if ($s1 == 7) { $newFreeSpins += 1; } 
+            if ($s1 == 4) { $spinWin += $betAmount * 10; } 
+            if ($s1 == 5) { $spinWin += $betAmount * 15; } 
+            if ($s1 == 1) { 
+                $bonusMode = 'BB'; $bonusSpinsLeft = 20; 
+            }
+        }
+        else if ($s1 == 1 && $s2 == 1 && $s3 == 3) {
+            $winningLines[] = $idx;
+            $bonusMode = 'RB'; $bonusSpinsLeft = 8; 
+        }
     }
 
-    // 11. APPLY BALANCE UPDATES
-    if ($spinWin > 0) {
-        $pdo->prepare("UPDATE users SET balance = balance + ? WHERE id = ?")->execute([$spinWin, $userId]);
-    }
+    $spinWin = $spinWin * $winMultiplier;
 
-    // 12. XP & PROGRESSION
-    $baseXp = floor($betAmount / 1000);
-    $finalXp = $baseXp * $xpMultiplier;
-    
-    // Pet Synergy Bonus
-    if ($freshUser['active_pet_id'] === $island['hostess_char_id']) {
-        $finalXp = ceil($finalXp * 1.10); 
-    }
+    // Apply Balances
+    if ($spinWin > 0) $pdo->prepare("UPDATE users SET balance = balance + ? WHERE id = ?")->execute([$spinWin, $userId]);
+    $xpGain = floor($betAmount / 1000);
+    $pdo->prepare("UPDATE users SET xp = xp + ? WHERE id = ?")->execute([$xpGain, $userId]);
 
-    $pdo->prepare("UPDATE users SET xp = xp + ? WHERE id = ?")->execute([$finalXp, $userId]);
-
-    // 13. TOURNAMENT TRACKING (If Active)
-    $stmtTourney = $pdo->prepare("SELECT tournament_id FROM tournament_entries WHERE user_id = ? AND tournament_id IN (SELECT id FROM tournaments WHERE status = 'active' AND start_time <= NOW() AND end_time > NOW())");
-    $stmtTourney->execute([$userId]);
-    $activeTourneys = $stmtTourney->fetchAll();
-    
-    foreach($activeTourneys as $t) {
-        $pdo->prepare("UPDATE tournament_entries SET spins_used = spins_used + 1, current_score = current_score + ? WHERE user_id = ? AND tournament_id = ?")
-            ->execute([$spinWin + $vaultContribution, $userId, $t['tournament_id']]);
-    }
-
-    // 14. LOGGING & ROTATE TOKEN
-    $nextToken = bin2hex(random_bytes(32));
-    $pdo->prepare("UPDATE machines SET total_laps = total_laps + 1, total_payout = total_payout + ?, session_token = ?, last_played_at = NOW() WHERE id = ?")
-        ->execute([$spinWin + $vaultContribution, $nextToken, $machineId]);
+    // Update Machine State
+    $pdo->prepare("UPDATE machines SET total_laps = total_laps + 1, total_payout = total_payout + ?, session_token = ?, free_spins = ?, bonus_mode = ?, bonus_spins_left = ?, last_played_at = NOW() WHERE id = ?")
+        ->execute([$spinWin, $nextToken, $newFreeSpins, $bonusMode, $bonusSpinsLeft, $machineId]);
     
     $pdo->prepare("INSERT INTO game_logs (user_id, machine_id, bet, win, result, xp_earned) VALUES (?, ?, ?, ?, ?, ?)")
-        ->execute([$userId, $machineId, $betAmount, $spinWin + $vaultContribution, json_encode($result), $finalXp]);
+        ->execute([$userId, $machineId, $actualBetDeducted, $spinWin, json_encode($result), $xpGain]);
 
-    // Commit Transaction
     $pdo->commit();
-    
-    // Fetch absolute final balance
     $finalBal = $pdo->query("SELECT balance FROM users WHERE id = $userId")->fetchColumn();
 
-    // 15. RESPONSE
     echo json_encode([
         'status' => 'success',
         'stops' => $result,
         'winning_lines' => $winningLines,
         'win_amount' => $spinWin,
-        'vault_contribution' => $vaultContribution,
         'new_balance' => (float)$finalBal,
-        'xp_gained' => $finalXp,
-        'is_teaser' => $isTeaser,
+        'free_spins' => $newFreeSpins,
+        'bonus_mode' => $bonusMode,
+        'bonus_spins_left' => $bonusSpinsLeft,
         'session_token' => $nextToken,
-        'multiplier_active' => $winMultiplier > 1 ? $winMultiplier : false
+        'is_teaser' => $isTeaser ?? false
     ]);
 
 } catch (Exception $e) {
-    if ($pdo->inTransaction()) {
-        $pdo->rollBack();
-    }
-    
-    error_log("Spin Engine Error (User $userId): " . $e->getMessage());
-    http_response_code(400);
-    echo json_encode(['error' => $e->getMessage()]);
+    if ($pdo->inTransaction()) $pdo->rollBack();
+    http_response_code(400); echo json_encode(['error' => $e->getMessage()]);
 }
 ?>
