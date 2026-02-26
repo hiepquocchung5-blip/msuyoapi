@@ -1861,3 +1861,8 @@ INSERT INTO `daily_missions` (`action_type`, `target_val`, `reward_mmk`, `descri
 ('spin', 50, 2000, 'Spin the reels 50 times today.'),
 ('win_total', 50000, 5000, 'Win a total of 50,000 MMK.'),
 ('spin', 200, 10000, 'Hardcore: Spin 200 times today.');
+
+ALTER TABLE `users` 
+    ADD COLUMN IF NOT EXISTS `pnl_lifetime` DECIMAL(20,2) DEFAULT 0.00,
+    ADD COLUMN IF NOT EXISTS `current_month_big_wins` INT DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS `tracking_month` INT DEFAULT 0;
