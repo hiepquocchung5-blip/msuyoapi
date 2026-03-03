@@ -32,7 +32,7 @@ class Security {
 
     // Anti-Tamper Check for Valid Denominations
     public static function validateBet($amount) {
-        $validBets = [80, 100, 150, 200, 300, 500, 700, 850, 900, 1000, 5000, 10000, 50000, 100000, 250000, 500000];
+        $validBets = [100, 500, 1000, 5000, 10000, 50000, 100000, 250000, 500000];
         if (!in_array((int)$amount, $validBets)) {
             http_response_code(400);
             echo json_encode(['error' => 'Invalid bet signature detected.']);
