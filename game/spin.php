@@ -4,11 +4,11 @@
 // Features: 5 Specific Islands, Restricted Bets, 70% Target RTP
 // ============================================================================
 
-require_once __DIR__ . '/../../utils/auth_middleware.php'; 
-require_once __DIR__ . '/../../utils/security.php'; 
+require_once __DIR__ . '/../utils/auth_middleware.php'; 
+require_once __DIR__ . '/../utils/security.php'; 
 
 $allowedOrigin = "https://suropara.com";
-header("Access-Control-Allow-Origin: *"); 
+header("Access-Control-Allow-Origin: $allowedOrigin"); 
 header("Access-Control-Allow-Methods: POST, GET, OPTIONS");
 header("Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With");
 header("Access-Control-Allow-Credentials: true");
