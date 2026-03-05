@@ -6,13 +6,13 @@ require_once __DIR__ . '/../utils/auth_middleware.php';
 $user = authenticate($pdo);
 
 // Fetch all active islands with full visual and economic config
-// This data drives the 3D Carousel and Particle Effects on the frontend
 $sql = "SELECT 
             id, 
             name, 
             slug, 
             `desc`, 
-            unlock_price, 
+            unlock_price,
+            req_deposit, -- NEW V3 PROGRESSION TIER
             rtp_rate, 
             hostess_char_id, 
             atmosphere_type, 
@@ -28,6 +28,7 @@ try {
     // Transform numeric types if necessary (PDO sometimes returns strings)
     foreach ($islands as &$island) {
         $island['unlock_price'] = (float)$island['unlock_price'];
+        $island['req_deposit'] = (float)$island['req_deposit'];
         $island['rtp_rate'] = (float)$island['rtp_rate'];
     }
 
