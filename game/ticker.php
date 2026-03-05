@@ -6,9 +6,11 @@
 // Security: Public endpoint. High frequency access expected. Optimize heavily.
 
 require_once __DIR__ . '/../config/db.php';
+require_once __DIR__ . '/../utils/auth_middleware.php'; 
 
 // --- 1. CORS & HEADERS ---
-header("Access-Control-Allow-Origin: https://suropara.com"); // Restrict to your domain in production via Nginx/Apache if preferred
+$allowedOrigin = "https://suropara.com";
+header("Access-Control-Allow-Origin: $allowedOrigin"); // Restrict to your domain in production via Nginx/Apache if preferred
 header("Content-Type: application/json; charset=UTF-8");
 header("Cache-Control: no-cache, no-store, must-revalidate"); // Prevent caching of live data
 
