@@ -14,13 +14,13 @@ header('Access-Control-Allow-Origin: https://suropara.com');
 require_once __DIR__ . '/../utils/auth_middleware.php'; 
 
 // 2. Authenticate and unlock session
-try {
-    $user = authenticate($pdo); 
-} catch (Exception $e) {
-    // If auth fails, send an SSE error event and exit safely
-    echo "event: error\ndata: " . json_encode(['message' => 'Unauthorized']) . "\n\n";
-    exit;
-}
+// try {
+//     $user = authenticate($pdo); 
+// } catch (Exception $e) {
+//     // If auth fails, send an SSE error event and exit safely
+//     echo "event: error\ndata: " . json_encode(['message' => 'Unauthorized']) . "\n\n";
+//     exit;
+// }
 
 if (session_status() === PHP_SESSION_ACTIVE) {
     session_write_close();
