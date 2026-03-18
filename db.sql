@@ -390,3 +390,50 @@ INSERT IGNORE INTO `level_configs` (`level`, `xp_required`, `reward_mmk`) VALUES
 (8, 50000, 1000000),
 (9, 100000, 2000000),
 (10, 200000, 50000000);
+
+-- ============================================================================
+-- SUROPARA V2/V3 - MACHINE NOTEBOOK SYSTEM
+-- Run this in production to establish the machine maintenance logging table
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS `machine_notes` (
+    `id` INT AUTO_INCREMENT PRIMARY KEY,
+    `machine_id` BIGINT(20) UNSIGNED NOT NULL,
+    `admin_id` INT(11) NOT NULL,
+    `note` TEXT NOT NULL,
+    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    -- Strict Relational Integrity (If a machine or admin is deleted, clean up notes)
+    CONSTRAINT `fk_machine_notes_mid` FOREIGN KEY (`machine_id`) REFERENCES `machines` (`id`) ON DELETE CASCADE,
+    CONSTRAINT `fk_machine_notes_aid` FOREIGN KEY (`admin_id`) REFERENCES `admin_users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Add index for fast querying when an admin opens a specific machine's notebook
+CREATE INDEX `idx_machine_notes_mid` ON `machine_notes` (`machine_id`);
+
+-- ============================================================================
+-- SUROPARA V3: DATABASE-DRIVEN REEL SPAWN RATES
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS `reel_spawn_rates` (
+    `island_id` BIGINT(20) UNSIGNED NOT NULL,
+    `reel_index` INT(11) NOT NULL, -- 1, 2, or 3
+    `sym_1` INT NOT NULL DEFAULT 10,   -- 7 (Grand Jackpot)
+    `sym_2` INT NOT NULL DEFAULT 40,   -- Character
+    `sym_3` INT NOT NULL DEFAULT 100,  -- Bar
+    `sym_4` INT NOT NULL DEFAULT 200,  -- Bell
+    `sym_5` INT NOT NULL DEFAULT 200,  -- Melon
+    `sym_6` INT NOT NULL DEFAULT 250,  -- Cherry
+    `sym_7` INT NOT NULL DEFAULT 200,  -- Replay
+    PRIMARY KEY (`island_id`, `reel_index`),
+    CONSTRAINT `fk_spawn_island` FOREIGN KEY (`island_id`) REFERENCES `islands` (`id`) ON DELETE CASCADE
+);
+
+-- Seed Initial Data for the 5 V3 Islands (Reels 1, 2, and 3)
+-- Adjust these numbers in the Admin Portal later to tweak the exact feel of each island.
+INSERT IGNORE INTO `reel_spawn_rates` (`island_id`, `reel_index`, `sym_1`, `sym_2`, `sym_3`, `sym_4`, `sym_5`, `sym_6`, `sym_7`) VALUES
+(1, 1, 10, 40, 100, 200, 200, 250, 200), (1, 2, 5, 30, 80, 220, 220, 245, 200), (1, 3, 2, 20, 60, 250, 250, 218, 200),
+(2, 1, 15, 45, 110, 190, 190, 260, 190), (2, 2, 8, 35, 90, 210, 210, 250, 190), (2, 3, 4, 25, 70, 240, 240, 220, 190),
+(3, 1, 8,  35, 90,  210, 210, 240, 210), (3, 2, 4, 25, 70, 230, 230, 230, 210), (3, 3, 1, 15, 50, 260, 260, 200, 210),
+(4, 1, 12, 42, 105, 195, 195, 255, 195), (4, 2, 6, 32, 85, 215, 215, 248, 195), (4, 3, 3, 22, 65, 245, 245, 215, 195),
+(5, 1, 10, 40, 100, 200, 200, 250, 200), (5, 2, 5, 30, 80, 220, 220, 245, 200), (5, 3, 2, 20, 60, 250, 250, 218, 200);

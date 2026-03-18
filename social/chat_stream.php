@@ -8,12 +8,7 @@ ignore_user_abort(true);
 header('Content-Type: text/event-stream');
 header('Cache-Control: no-cache, must-revalidate');
 header('Connection: keep-alive');
-header('X-Accel-Buffering: no'); // Essential for Nginx
-header('Access-Control-Allow-Origin: https://suropara.com');
-
-// Note: Since auth_middleware.php was removed, ensure you include your database connection here 
-// so that the $pdo variable is available for the queries below.
-// require_once __DIR__ . '/../utils/database.php'; 
+require_once __DIR__ . '/../utils/auth_middleware.php';
 
 // 3. Get the client's last known message ID
 $lastId = isset($_GET['last_id']) ? (int)$_GET['last_id'] : 0;
