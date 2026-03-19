@@ -1,18 +1,13 @@
 <?php
 // ============================================================================
-// SUROPARA API - LIVE GLOBAL TICKER (v10.1 Production)
+// SUROPARA API - LIVE GLOBAL TICKER (v10.2 Production)
 // ============================================================================
-// Purpose: Provides live data (Jackpot, Recent Big Wins) for the frontend lobby.
-// Security: Public endpoint. High frequency access expected. Optimize heavily.
 
 require_once __DIR__ . '/../config/db.php';
-require_once __DIR__ . '/../utils/auth_middleware.php'; 
 
-// --- 1. CORS & HEADERS ---
-$allowedOrigin = "https://suropara.com";
-header("Access-Control-Allow-Origin: $allowedOrigin"); // Restrict to your domain in production via Nginx/Apache if preferred
+header("Access-Control-Allow-Origin: https://suropara.com"); 
 header("Content-Type: application/json; charset=UTF-8");
-header("Cache-Control: no-cache, no-store, must-revalidate"); // Prevent caching of live data
+header("Cache-Control: no-cache, no-store, must-revalidate"); 
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);
@@ -20,20 +15,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 try {
-    // --- 2. FETCH CURRENT JACKPOT ---
-    // Read directly from the global_jackpots table
-    $stmtJP = $pdo->query("SELECT current_amount FROM global_jackpots WHERE name = 'GRAND SURO JACKPOT'");
-    $jackpot = $stmtJP->fetchColumn();
-    
-    // Fallback if table is empty
-    if ($jackpot === false) {
-        $jackpot = 3000000.00;
-    }
+    // --- 1. FETCH CURRENT JACKPOT (Per Island or Global Highest) ---
+    $islandId = isset($_GET['island_id']) ? (int)$_GET['island_id'] : null;
 
-    // --- 3. FETCH RECENT BIG WINS ---
-    // Optimized Query: Only look at the last 24 hours to keep the index scan small.
-    // "Big Win" defined here as winning 50x the bet amount or more.
-    // Limits to 5 results to keep the payload very small.
+    if ($islandId && $islandId >= 1 && $islandId <= 5) {
+        $stmtJP = $pdo->prepare("SELECT current_amount FROM global_jackpots WHERE island_id = ?");
+        $stmtJP->execute([$islandId]);
+        $jackpot = $stmtJP->fetchColumn();
+    } else {
+        // Fallback: Just grab the highest jackpot if no island specified
+        $stmtJP = $pdo->query("SELECT current_amount FROM global_jackpots ORDER BY current_amount DESC LIMIT 1");
+        $jackpot = $stmtJP->fetchColumn();
+    }
+    
+    if ($jackpot === false) $jackpot = 3000000.00;
+
+    // --- 2. FETCH RECENT BIG WINS ---
     $sqlWins = "
         SELECT 
             u.username, 
@@ -52,21 +49,17 @@ try {
     $stmtWins = $pdo->query($sqlWins);
     $recentWins = $stmtWins->fetchAll(PDO::FETCH_ASSOC);
 
-    // --- 4. FORMAT MESSAGES FOR FRONTEND ---
+    // --- 3. FORMAT MESSAGES FOR FRONTEND ---
     $tickerItems = [];
     
-    // Primary item is always the Jackpot
     $tickerItems[] = [
         'type' => 'jackpot',
         'text' => "GRAND JACKPOT: " . number_format($jackpot) . " MMK",
         'highlight' => true
     ];
 
-    // Append actual user wins
     foreach ($recentWins as $w) {
-        // Mask part of the username for privacy if desired (e.g., User99***)
         $displayUser = htmlspecialchars($w['username']);
-        
         $tickerItems[] = [
             'type' => 'win',
             'text' => "{$displayUser} just won " . number_format($w['amount']) . " MMK in {$w['island_name']}!",
@@ -74,42 +67,25 @@ try {
         ];
     }
 
-    // --- 5. FALLBACK / HYPE MESSAGES ---
-    // If the server hasn't had many big wins recently, inject hype messages 
-    // to keep the ticker moving and looking active.
     if (count($recentWins) < 2) {
-        $tickerItems[] = [
-            'type' => 'info', 
-            'text' => "🔥 Kyoto Zen RTP is surging! Secure a machine now.",
-            'highlight' => false
-        ];
-        $tickerItems[] = [
-            'type' => 'info', 
-            'text' => "💎 Daily Missions reset at midnight. Don't forget to claim!",
-            'highlight' => false
-        ];
+        $tickerItems[] = ['type' => 'info', 'text' => "🔥 Kyoto Zen RTP is surging! Secure a machine now.", 'highlight' => false];
+        $tickerItems[] = ['type' => 'info', 'text' => "💎 Daily Missions reset at midnight. Don't forget to claim!", 'highlight' => false];
     }
 
-    // --- 6. OUTPUT PAYLOAD ---
     echo json_encode([
         'status' => 'success',
         'jackpot_amount' => (float)$jackpot,
         'messages' => $tickerItems,
-        'timestamp' => time() // Useful if the frontend wants to track lag
+        'timestamp' => time() 
     ]);
 
 } catch (PDOException $e) {
-    // Fail silently with generic fallback data to prevent breaking the frontend UI
     error_log("Ticker API Error: " . $e->getMessage());
-    
-    http_response_code(200); // Send 200 so UI doesn't crash, just show default
+    http_response_code(200); 
     echo json_encode([
         'status' => 'success',
         'jackpot_amount' => 3000000,
-        'messages' => [
-            ['type' => 'jackpot', 'text' => "GRAND JACKPOT: 3,000,000 MMK", 'highlight' => true],
-            ['type' => 'info', 'text' => "Welcome to Suropara Casino!", 'highlight' => false]
-        ]
+        'messages' => [['type' => 'jackpot', 'text' => "GRAND JACKPOT: 3,000,000 MMK", 'highlight' => true]]
     ]);
 }
 ?>
