@@ -5,10 +5,17 @@
 // 1. Core stream settings
 set_time_limit(0);
 ignore_user_abort(true);
-// header('Content-Type: text/event-stream');
+
+// CRITICAL FIX 1: These headers MUST be active for SSE to work.
+header('Content-Type: text/event-stream');
 header('Cache-Control: no-cache, must-revalidate');
 header('Connection: keep-alive');
-require_once __DIR__ . '/../utils/auth_middleware.php';
+header('Access-Control-Allow-Origin: *');
+
+// CRITICAL FIX 2: Include db.php directly. 
+// DO NOT use auth_middleware.php here. EventSource cannot send Bearer tokens, 
+// so the middleware will reject the connection and force a JSON error!
+require_once __DIR__ . '/../config/db.php';
 
 // 3. Get the client's last known message ID
 $lastId = isset($_GET['last_id']) ? (int)$_GET['last_id'] : 0;
@@ -61,7 +68,7 @@ while (true) {
                 $idleSeconds = 0; 
             }
         } else {
-            // 5. Keep-Alive Ping
+            // 5. Keep-Alive Ping (Prevents the browser from closing the connection due to inactivity)
             $idleSeconds++;
             if ($idleSeconds >= 15) {
                 echo ": keepalive\n\n"; 
@@ -77,14 +84,14 @@ while (true) {
         sleep(5); // Back off for 5 seconds on error
     }
 
-    // Push data to browser
+    // Push data to browser immediately
     if (ob_get_level() > 0) {
         ob_flush();
     }
     flush();
 
     // 6. Polling delay
-    // PRO TIP: If you have >100 concurrent users, change this to sleep(2) or sleep(3) 
+    // If you have >100 concurrent users, change this to sleep(2) or sleep(3) 
     // to prevent overwhelming your database server.
     sleep(1);
 }
