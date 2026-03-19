@@ -1,16 +1,16 @@
 <?php
 // ============================================================================
-// SUROPARA V4.5 - LEVIATHAN SPIN ENGINE (REAL-WORLD P&L CONTROL)
+// SUROPARA V4.6 - LEVIATHAN SPIN ENGINE (P&L + PROGRESSION TRACKING)
 // ----------------------------------------------------------------------------
 // FEATURES:
 // 1. DB-Driven Independent Reel Spawn Rates with Dynamic Multiplication.
 // 2. Escalating Grand Jackpots with Thermal Compression Odds.
-// 3. Leviathan P&L Clamp: Auto-adjusts within a -3% to +3% margin of DB target.
-// 4. Psychological Bleeding: Substitutes big wins for teasers if user is too lucky.
+// 3. Leviathan P&L Clamp (-3% to +3% Target Margin).
+// 4. Auto-Tracking for Daily Missions & Tournament Leaderboards.
 // ============================================================================
 
 $allowedOrigin = "https://suropara.com";
-header("Access-Control-Allow-Origin: *"); 
+header("Access-Control-Allow-Origin: $allowedOrigin"); 
 header("Access-Control-Allow-Methods: POST, GET, OPTIONS");
 header("Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With");
 header("Access-Control-Allow-Credentials: true");
@@ -73,18 +73,17 @@ try {
     
     if ($actualBetDeducted > 0) {
         $pdo->prepare("UPDATE users SET balance = balance - ?, pnl_lifetime = pnl_lifetime + ? WHERE id = ?")->execute([$actualBetDeducted, $actualBetDeducted, $userId]);
-        $freshUser['balance'] -= $actualBetDeducted; // Update local variable for math
+        $freshUser['balance'] -= $actualBetDeducted;
     }
 
     // --- PHASE 3: LEVIATHAN AUTO-RTP CLAMP (-3% to +3% MARGIN) ---
     $stmtIsland = $pdo->prepare("SELECT rtp_rate FROM islands WHERE id = ?");
     $stmtIsland->execute([$islandId]);
-    $targetRtpPercent = (float)$stmtIsland->fetchColumn(); // e.g. 70.0%
+    $targetRtpPercent = (float)$stmtIsland->fetchColumn(); 
     
-    $rtpUpperBound = $targetRtpPercent + 3.0; // 73.0%
-    $rtpLowerBound = $targetRtpPercent - 3.0; // 67.0%
+    $rtpUpperBound = $targetRtpPercent + 3.0; 
+    $rtpLowerBound = $targetRtpPercent - 3.0; 
 
-    // Fetch Lifetime Deposits & Withdrawals
     $stmtFin = $pdo->prepare("
         SELECT 
             COALESCE(SUM(CASE WHEN type='deposit' THEN amount ELSE 0 END), 0) as total_dep,
@@ -97,28 +96,24 @@ try {
     $totalDeposited = (float)$fin['total_dep'];
     $totalWithdrawn = (float)$fin['total_with'];
     
-    $machineState = 'NEUTRAL'; // HOT, COLD, or NEUTRAL
-    $baseHitFreq = 22.0; // Standard 22% chance to hit *something*
+    $machineState = 'NEUTRAL'; 
+    $baseHitFreq = 22.0; 
 
     if ($totalDeposited == 0) {
-        // Free/Bonus Money Player: Cap them hard so they don't drain the house without depositing
         if ($freshUser['balance'] > 15000) {
             $machineState = 'COLD';
-            $baseHitFreq = 10.0; // Starve them out
+            $baseHitFreq = 10.0; 
         }
     } else {
-        // Calculate Actual User RTP: (Current Balance + Total Withdrawn) / Total Deposited
         $totalExtractedValue = $freshUser['balance'] + $totalWithdrawn;
-        $currentRtpPercent = ($totalExtractedValue / $totalDeposited) * 100;
+        $currentRtpPercent = ($totalExtractedValue / max(1, $totalDeposited)) * 100;
         
         if ($currentRtpPercent > $rtpUpperBound) {
-            // Player is beating the upper margin. CLAMP DOWN.
             $machineState = 'COLD';
-            $baseHitFreq = 16.0; // Tighter wins
+            $baseHitFreq = 16.0; 
         } elseif ($currentRtpPercent < $rtpLowerBound) {
-            // Player is losing too fast. BOOST THEM.
             $machineState = 'HOT';
-            $baseHitFreq = 28.0; // Looser wins to bring them back up
+            $baseHitFreq = 28.0; 
         }
     }
 
@@ -150,19 +145,16 @@ try {
         }
     }
 
-    // DYNAMIC SPAWN RATE MODIFIERS based on Hot/Cold State
     foreach ($reelSpawnRates as $reelKey => &$weights) {
         if ($machineState === 'COLD') {
-            // Starve the reels of premium symbols, flood with Cherries and Replays
-            $weights[1] = max(1, (int)($weights[1] * 0.1)); // Nerf 7s
-            $weights[2] = max(1, (int)($weights[2] * 0.2)); // Nerf Chars
-            $weights[3] = max(1, (int)($weights[3] * 0.5)); // Nerf BARs
-            $weights[6] = (int)($weights[6] * 1.5);         // Boost Cherries
+            $weights[1] = max(1, (int)($weights[1] * 0.1)); 
+            $weights[2] = max(1, (int)($weights[2] * 0.2)); 
+            $weights[3] = max(1, (int)($weights[3] * 0.5)); 
+            $weights[6] = (int)($weights[6] * 1.5);         
         } elseif ($machineState === 'HOT') {
-            // Loosen up the reels for premium drops
-            $weights[2] = (int)($weights[2] * 1.5);         // Boost Chars
-            $weights[3] = (int)($weights[3] * 1.5);         // Boost BARs
-            $weights[4] = (int)($weights[4] * 1.2);         // Boost Bells
+            $weights[2] = (int)($weights[2] * 1.5);         
+            $weights[3] = (int)($weights[3] * 1.5);         
+            $weights[4] = (int)($weights[4] * 1.2);         
         }
     }
 
@@ -177,7 +169,6 @@ try {
     $isHit = (random_int(1, 10000) <= (int)($baseHitFreq * 100));
     $isGrandJackpot = false;
     
-    // GJP Logic (Bypasses personal clamp because community pays for it)
     $gjpMax = (float)($gjpData['max_amount'] ?? 7200000);
     $gjpTrigger = (float)($gjpData['trigger_amount'] ?? 3600000);
     if (!$isFreeSpin && !$bonusMode) {
@@ -201,7 +192,6 @@ try {
     $isTeaser = false; $isReachEye = false;
 
     if ($isGrandJackpot) {
-        // GJP EXECUTED
         $spinWin += $currentJackpot;
         $baseSeed = (float)($gjpData['base_seed'] ?? 3000000);
         $pdo->prepare("UPDATE global_jackpots SET current_amount = ?, last_won_by = ?, last_won_amount = ?, last_won_at = NOW() WHERE island_id = ?")->execute([$baseSeed, $freshUser['username'], $currentJackpot, $islandId]);
@@ -216,28 +206,21 @@ try {
         $winSym = 1;
 
     } elseif ($isHit) {
-        // --- DYNAMIC WIN LOGIC ---
-        // Standard win weights
         $winSymWeights = [2=>5, 3=>10, 4=>25, 5=>20, 6=>25, 7=>15];
-        
         if ($bonusMode === 'HEAVEN') {
             $winSymWeights = [2=>40, 3=>60]; 
         } elseif ($machineState === 'COLD' && !$bonusMode) {
-            // The Bleed Clamp: Force the user to only win small amounts (Cherries/Replays)
             $winSymWeights = [4=>5, 5=>5, 6=>70, 7=>20]; 
         } elseif ($machineState === 'HOT' && !$bonusMode) {
-            // The Generous State: Give back mid/high wins to bump RTP up
             $winSymWeights = [2=>15, 3=>25, 4=>20, 5=>20, 6=>10, 7=>10]; 
         }
         
         $winSym = $rollReel($winSymWeights);
         
-        // Populate base board with dynamically adjusted spawn rates
         for($i=0; $i<=6; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_1']);
         for($i=1; $i<=7; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_2']);
         for($i=2; $i<=8; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_3']);
 
-        // Overwrite a random payline with the chosen win symbol
         $chosenLine = array_rand($paylines);
         $result[$paylines[$chosenLine][0]] = $winSym;
         $result[$paylines[$chosenLine][1]] = $winSym;
@@ -245,47 +228,40 @@ try {
         $winningLines[] = $chosenLine;
 
     } else {
-        // --- LOSS LOGIC & PSYCHOLOGICAL TEASERS ---
         $winSym = 0;
-        
-        // If they are COLD (bleeding), increase teaser rate to 70% to keep them highly addicted while losing
         $teaserChance = ($machineState === 'COLD') ? 70 : 40; 
 
         if (random_int(1, 100) <= $teaserChance) {
             $isTeaser = true;
-            $isReachEye = (random_int(1, 100) <= 60); // 60% chance for a 2-symbol deep tease
+            $isReachEye = (random_int(1, 100) <= 60); 
             
-            // Build the teaser board
             for($i=0; $i<=6; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_1']);
             for($i=1; $i<=7; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_2']);
             for($i=2; $i<=8; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_3']);
             
             $chosenLine = array_rand($paylines);
-            $teaseSym = random_int(1, 3); // Tease high value symbols (1, 2, or 3)
+            $teaseSym = random_int(1, 3); 
             
             if ($isReachEye) {
                 $result[$paylines[$chosenLine][0]] = $teaseSym;
                 $result[$paylines[$chosenLine][1]] = $teaseSym;
-                // Force 3rd reel miss
                 do { $finalSym = random_int(1, 7); } while ($finalSym === $teaseSym);
                 $result[$paylines[$chosenLine][2]] = $finalSym;
             } else {
-                $result[4] = $teaseSym; // Center tease
+                $result[4] = $teaseSym; 
             }
         } else {
-            // Standard Loss Drop
             for($i=0; $i<=6; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_1']);
             for($i=1; $i<=7; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_2']);
             for($i=2; $i<=8; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_3']);
         }
 
-        // FAILSAFE: Ensure no accidental win lines formed by RNG
         $failsafeLoops = 0;
         do {
             $hasWin = false;
             foreach($paylines as $l) {
                 if ($result[$l[0]] == $result[$l[1]] && $result[$l[1]] == $result[$l[2]]) {
-                    $result[$l[2]] = ($result[$l[2]] % 7) + 1; // Shift symbol by 1 to break win
+                    $result[$l[2]] = ($result[$l[2]] % 7) + 1; 
                     $hasWin = true;
                 }
             }
@@ -306,7 +282,6 @@ try {
         
         $basePayout = $betAmount * $mult;
         
-        // Optional Event Multipliers
         $stmtEvent = $pdo->prepare("SELECT multiplier FROM marketing_events WHERE is_active = 1 AND start_time <= NOW() AND end_time > NOW() LIMIT 1");
         $stmtEvent->execute();
         $eventMult = $stmtEvent->fetchColumn() ?: 1.0;
@@ -357,11 +332,54 @@ try {
     
     $pdo->prepare("INSERT INTO game_logs (user_id, machine_id, bet, win, result, xp_earned) VALUES (?, ?, ?, ?, ?, ?)")->execute([$userId, $machineId, $actualBetDeducted, $spinWin, json_encode($result), $xpGain]);
 
+    // --- PHASE 8: PROGRESSION & COMPETITION TRACKING ---
+    
+    // 1. Tournaments (Update score if user is in an active tournament and hasn't hit spin limit)
+    $stmtTourney = $pdo->prepare("
+        UPDATE tournament_entries te 
+        JOIN tournaments t ON te.tournament_id = t.id 
+        SET te.spins_used = te.spins_used + 1, 
+            te.current_score = te.current_score + ? 
+        WHERE te.user_id = ? 
+          AND t.status = 'active' 
+          AND t.start_time <= NOW() 
+          AND t.end_time > NOW() 
+          AND te.spins_used < t.spin_limit
+    ");
+    $stmtTourney->execute([$spinWin, $userId]);
+
+    // 2. Daily Missions (Lazy Init + Update)
+    $today = date('Y-m-d');
+    
+    // Ensure tracking rows exist for today's active missions
+    $pdo->prepare("
+        INSERT IGNORE INTO user_mission_progress (user_id, mission_id, tracking_date)
+        SELECT ?, id, ? FROM daily_missions WHERE is_active = 1
+    ")->execute([$userId, $today]);
+
+    // Increment Spin Missions (+1)
+    $pdo->prepare("
+        UPDATE user_mission_progress ump 
+        JOIN daily_missions dm ON ump.mission_id = dm.id 
+        SET ump.progress = ump.progress + 1 
+        WHERE ump.user_id = ? AND ump.tracking_date = ? AND dm.action_type = 'spin'
+    ")->execute([$userId, $today]);
+
+    // Increment Win Amount Missions (+Amount)
+    if ($spinWin > 0) {
+        $pdo->prepare("
+            UPDATE user_mission_progress ump 
+            JOIN daily_missions dm ON ump.mission_id = dm.id 
+            SET ump.progress = ump.progress + ? 
+            WHERE ump.user_id = ? AND ump.tracking_date = ? AND dm.action_type = 'win_total'
+        ")->execute([$spinWin, $userId, $today]);
+    }
+
     $pdo->commit();
     
     $finalBal = $pdo->query("SELECT balance FROM users WHERE id = $userId")->fetchColumn();
 
-    // --- PHASE 8: DATA PAYLOAD ---
+    // --- PHASE 9: DATA PAYLOAD ---
     echo json_encode([
         'status' => 'success', 
         'stops' => $result, 
