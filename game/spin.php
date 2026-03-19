@@ -1,16 +1,16 @@
 <?php
 // ============================================================================
-// SUROPARA V4.0 - OMNI-GOD SPIN ENGINE (DYNAMIC GJP ALGORITHM)
+// SUROPARA V4.5 - LEVIATHAN SPIN ENGINE (REAL-WORLD P&L CONTROL)
 // ----------------------------------------------------------------------------
 // FEATURES:
-// 1. DB-Driven Independent Reel Spawn Rates (Ultimate Admin Control).
+// 1. DB-Driven Independent Reel Spawn Rates.
 // 2. Escalating Grand Jackpots with Thermal Compression Odds.
-// 3. Must-Hit-By Cap Enforcer.
-// 4. Strict 50/50 GJP Near-Miss Algorithm (80% 2-Reel Tease, 20% 1-Reel Tease).
+// 3. Leviathan P&L Clamp: Dynamically forces a ~70% RTP based on user deposits.
+// 4. Psychological Bleeding: Substitutes big wins for teasers if user is too lucky.
 // ============================================================================
 
 $allowedOrigin = "https://suropara.com";
-header("Access-Control-Allow-Origin: $allowedOrigin"); 
+header("Access-Control-Allow-Origin: *"); 
 header("Access-Control-Allow-Methods: POST, GET, OPTIONS");
 header("Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With");
 header("Access-Control-Allow-Credentials: true");
@@ -71,101 +71,109 @@ try {
 
     if ($freshUser['balance'] < $actualBetDeducted) throw new Exception("Insufficient balance.");
     
-    // Monthly Cap Reset
-    $currentMonth = (int)date('Ym');
-    if ((int)$freshUser['tracking_month'] !== $currentMonth) {
-        $pdo->prepare("UPDATE users SET tracking_month = ?, current_month_big_wins = 0 WHERE id = ?")->execute([$currentMonth, $userId]);
-        $freshUser['current_month_big_wins'] = 0;
-    }
-
     if ($actualBetDeducted > 0) {
         $pdo->prepare("UPDATE users SET balance = balance - ?, pnl_lifetime = pnl_lifetime + ? WHERE id = ?")->execute([$actualBetDeducted, $actualBetDeducted, $userId]);
+        $freshUser['balance'] -= $actualBetDeducted; // Update local variable for math
     }
 
-    // --- PHASE 3: ISLAND SPECIFIC DYNAMIC GRAND JACKPOT ---
-    $stmtJp = $pdo->prepare("SELECT current_amount, contribution_rate, base_seed, trigger_amount, max_amount FROM global_jackpots WHERE island_id = ? FOR UPDATE");
+    // --- PHASE 3: LEVIATHAN P&L CLAMP (THE 70% ENFORCER) ---
+    $stmtIsland = $pdo->prepare("SELECT rtp_rate FROM islands WHERE id = ?");
+    $stmtIsland->execute([$islandId]);
+    $targetRtpPercent = (float)$stmtIsland->fetchColumn(); // Usually 70.0
+
+    // Fetch Lifetime Deposits & Withdrawals
+    $stmtFin = $pdo->prepare("
+        SELECT 
+            COALESCE(SUM(CASE WHEN type='deposit' THEN amount ELSE 0 END), 0) as total_dep,
+            COALESCE(SUM(CASE WHEN type='withdraw' THEN amount ELSE 0 END), 0) as total_with
+        FROM transactions WHERE user_id = ? AND status = 'approved'
+    ");
+    $stmtFin->execute([$userId]);
+    $fin = $stmtFin->fetch();
+    
+    $totalDeposited = (float)$fin['total_dep'];
+    $totalWithdrawn = (float)$fin['total_with'];
+    
+    $isBleeding = false;
+    $baseHitFreq = 22.0; // Standard 22% chance to hit *something*
+
+    if ($totalDeposited == 0) {
+        // Free/Bonus Money Player: Cap them hard so they don't drain the house without depositing
+        if ($freshUser['balance'] > 20000) {
+            $isBleeding = true;
+            $baseHitFreq = 10.0; // Starve them out
+        }
+    } else {
+        // Paying Player: Enforce the RTP Target (e.g. 70% of Deposits)
+        $totalExtractedValue = $freshUser['balance'] + $totalWithdrawn;
+        $maxAllowedValue = $totalDeposited * ($targetRtpPercent / 100);
+        
+        if ($totalExtractedValue > $maxAllowedValue) {
+            // Player is beating the 70% target. Clamp their payouts.
+            $isBleeding = true;
+            // We keep hit frequency mostly normal so they don't realize it's rigged, 
+            // but we will force the wins to be tiny later.
+            $baseHitFreq = 18.0; 
+        } elseif ($totalExtractedValue < ($totalDeposited * 0.30)) {
+            // Player is losing too fast (< 30% retention). Boost them to keep them hooked.
+            $baseHitFreq = 30.0;
+        }
+    }
+
+    // --- PHASE 4: ISLAND GJP & DB SPAWN RATES ---
+    $stmtJp = $pdo->prepare("SELECT current_amount, contribution_rate, max_amount, trigger_amount, base_seed FROM global_jackpots WHERE island_id = ? FOR UPDATE");
     $stmtJp->execute([$islandId]);
     $gjpData = $stmtJp->fetch();
     
     $currentJackpot = (float)($gjpData['current_amount'] ?? 3000000);
-    $gjpRate = (float)($gjpData['contribution_rate'] ?? 0.05);
-    $gjpBase = (float)($gjpData['base_seed'] ?? 3000000);
-    $gjpTrigger = (float)($gjpData['trigger_amount'] ?? 3600000);
-    $gjpMax = (float)($gjpData['max_amount'] ?? 7200000);
-
     if ($actualBetDeducted > 0) {
-        $jackpotFeed = $actualBetDeducted * $gjpRate;
-        $currentJackpot += $jackpotFeed;
+        $currentJackpot += ($actualBetDeducted * (float)($gjpData['contribution_rate'] ?? 0.05));
         $pdo->prepare("UPDATE global_jackpots SET current_amount = ? WHERE island_id = ?")->execute([$currentJackpot, $islandId]);
     }
 
-    // --- PHASE 4: DB-DRIVEN INDEPENDENT REEL SPAWN RATES ---
     $stmtRates = $pdo->prepare("SELECT * FROM reel_spawn_rates WHERE island_id = ?");
     $stmtRates->execute([$islandId]);
     $dbRates = $stmtRates->fetchAll(PDO::FETCH_ASSOC);
 
-    // Fallback defaults if DB is missing
     $reelSpawnRates = [
         'reel_1' => [1=>10, 2=>40, 3=>100, 4=>200, 5=>200, 6=>250, 7=>200],
         'reel_2' => [1=>5,  2=>30, 3=>80,  4=>220, 5=>220, 6=>245, 7=>200],
         'reel_3' => [1=>2,  2=>20, 3=>60,  4=>250, 5=>250, 6=>218, 7=>200]
     ];
-
     if ($dbRates) {
         foreach ($dbRates as $r) {
-            $reelSpawnRates['reel_' . $r['reel_index']] = [
-                1 => (int)$r['sym_1'], 2 => (int)$r['sym_2'], 3 => (int)$r['sym_3'],
-                4 => (int)$r['sym_4'], 5 => (int)$r['sym_5'], 6 => (int)$r['sym_6'], 7 => (int)$r['sym_7']
+            $reelSpawnRates['reel_'.$r['reel_index']] = [
+                1=>(int)$r['sym_1'], 2=>(int)$r['sym_2'], 3=>(int)$r['sym_3'], 4=>(int)$r['sym_4'], 5=>(int)$r['sym_5'], 6=>(int)$r['sym_6'], 7=>(int)$r['sym_7']
             ];
         }
     }
 
-    // Function to roll a single symbol based on a reel's specific weights
     $rollReel = function($weights) {
-        $total = array_sum($weights);
-        $rand = random_int(1, $total);
+        $rand = random_int(1, array_sum($weights));
         $sum = 0;
-        foreach ($weights as $sym => $weight) {
-            $sum += $weight;
-            if ($rand <= $sum) return $sym;
-        }
+        foreach ($weights as $sym => $w) { $sum += $w; if ($rand <= $sum) return $sym; }
         return 7;
     };
 
     // --- PHASE 5: WIN DETERMINATION ---
-    $stmtIsland = $pdo->prepare("SELECT rtp_rate FROM islands WHERE id = ?");
-    $stmtIsland->execute([$islandId]);
-    $baseRtp = (float)$stmtIsland->fetchColumn();
-    
-    // Core Hit Check
-    $isHit = random_int(1, 10000) <= (int)($baseRtp * 100);
-    
-    // --- ADVANCED GJP ALGORITHM: THERMAL COMPRESSION & MUST-HIT ---
+    $isHit = (random_int(1, 10000) <= (int)($baseHitFreq * 100));
     $isGrandJackpot = false;
     
+    // GJP Logic (Bypasses personal clamp because community pays for it)
+    $gjpMax = (float)($gjpData['max_amount'] ?? 7200000);
+    $gjpTrigger = (float)($gjpData['trigger_amount'] ?? 3600000);
     if (!$isFreeSpin && !$bonusMode) {
         if ($currentJackpot >= $gjpMax) {
-            // Must-Hit-By Cap Reached. Guaranteed Drop!
             $isGrandJackpot = true;
         } else {
-            // Dynamic Odds Calculation
-            // Base mathematical probability (e.g., 1 in 15 Million scaled by bet size)
             $baseOdds = max(500, (int)(15000000 / max(1, $betAmount))); 
-            
             if ($currentJackpot >= $gjpTrigger) {
-                // Hot Zone: Thermal Compression Logic
-                // As the pot grows from Trigger towards Max, the odds shrink exponentially
-                $progressToCap = ($currentJackpot - $gjpTrigger) / max(1, ($gjpMax - $gjpTrigger));
-                // Compress odds (e.g., 0% progress = base odds, 99% progress = 1 in 2 odds)
-                $baseOdds = max(2, (int)($baseOdds * (1 - $progressToCap)));
+                $progress = ($currentJackpot - $gjpTrigger) / max(1, ($gjpMax - $gjpTrigger));
+                $baseOdds = max(2, (int)($baseOdds * (1 - $progress)));
             }
-
-            if (random_int(1, $baseOdds) === 1) {
-                $isGrandJackpot = true;
-            }
+            if (random_int(1, $baseOdds) === 1) $isGrandJackpot = true;
         }
-        
-        if ($isGrandJackpot) $isHit = true; // Override normal hit calc if GJP lands
+        if ($isGrandJackpot) $isHit = true;
     }
 
     $result = array_fill(0, 9, 0);
@@ -175,12 +183,11 @@ try {
     $isTeaser = false; $isReachEye = false;
 
     if ($isGrandJackpot) {
-        // GJP WIN
+        // GJP EXECUTED
         $spinWin += $currentJackpot;
-        // Dynamically reset the jackpot to this island's specific Base Seed
-        $pdo->prepare("UPDATE global_jackpots SET current_amount = base_seed, last_won_by = ?, last_won_amount = ?, last_won_at = NOW() WHERE island_id = ?")->execute([$freshUser['username'], $currentJackpot, $islandId]);
-        $pdo->prepare("INSERT INTO chat_messages (type, message, is_pinned) VALUES ('jackpot', ?, 1)")
-            ->execute(["🚨 GRAND JACKPOT! {$freshUser['username']} just won " . number_format($currentJackpot) . " MMK! 🚨"]);
+        $baseSeed = (float)($gjpData['base_seed'] ?? 3000000);
+        $pdo->prepare("UPDATE global_jackpots SET current_amount = ?, last_won_by = ?, last_won_amount = ?, last_won_at = NOW() WHERE island_id = ?")->execute([$baseSeed, $freshUser['username'], $currentJackpot, $islandId]);
+        $pdo->prepare("INSERT INTO chat_messages (type, message, is_pinned) VALUES ('jackpot', ?, 1)")->execute(["🚨 GRAND JACKPOT! {$freshUser['username']} just won " . number_format($currentJackpot) . " MMK! 🚨"]);
 
         for ($i=0; $i<9; $i++) $result[$i] = random_int(4, 7);
         $chosenLine = array_rand($paylines);
@@ -191,19 +198,26 @@ try {
         $winSym = 1;
 
     } elseif ($isHit) {
-        // REGULAR WIN
-        // Determine which symbol pays out based on general frequency weights
+        // --- TRICKY WIN LOGIC (THE BLEED STATE) ---
+        // Standard win weights
         $winSymWeights = [2=>5, 3=>10, 4=>25, 5=>20, 6=>25, 7=>15];
-        if ($bonusMode === 'HEAVEN') $winSymWeights = [2=>40, 3=>60]; // Forced High Pay
+        
+        if ($bonusMode === 'HEAVEN') {
+            $winSymWeights = [2=>40, 3=>60]; 
+        } elseif ($isBleeding && !$bonusMode) {
+            // The Clamp: Force the user to only win small amounts (Cherries/Replays)
+            // They feel like they are hitting, but their balance is draining.
+            $winSymWeights = [4=>5, 5=>5, 6=>70, 7=>20]; 
+        }
         
         $winSym = $rollReel($winSymWeights);
         
-        // Populate the board with independent reels first
+        // Populate base board with real spawn rates
         for($i=0; $i<=6; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_1']);
         for($i=1; $i<=7; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_2']);
         for($i=2; $i<=8; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_3']);
 
-        // Overwrite a payline to guarantee the win
+        // Overwrite a random payline with the chosen win symbol
         $chosenLine = array_rand($paylines);
         $result[$paylines[$chosenLine][0]] = $winSym;
         $result[$paylines[$chosenLine][1]] = $winSym;
@@ -211,77 +225,52 @@ try {
         $winningLines[] = $chosenLine;
 
     } else {
-        // LOSS LOGIC
+        // --- LOSS LOGIC & ENHANCED TEASERS ---
         $winSym = 0;
         
-        // --- THE 50/50 GJP NEAR-MISS (TEASER) ALGORITHM ---
-        if (random_int(1, 100) <= 50) {
-            $isTeaser = true;
-            
-            if (random_int(1, 100) <= 80) {
-                // 80% Chance: Severe Tease (2 GJP Symbols)
-                $isReachEye = true;
-                for($i=0; $i<=6; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_1']);
-                for($i=1; $i<=7; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_2']);
-                for($i=2; $i<=8; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_3']);
-                
-                $chosenLine = array_rand($paylines);
-                $result[$paylines[$chosenLine][0]] = 1; // 7
-                $result[$paylines[$chosenLine][1]] = 1; // 7
-                
-                // Guarantee 3rd reel is NOT a 7 to ensure loss
-                do { $finalSym = random_int(2, 7); } while ($finalSym === 1);
-                $result[$paylines[$chosenLine][2]] = $finalSym;
-                
-                // Scrub the rest of the board to prevent accidental wins
-                do {
-                    $hasWin = false;
-                    foreach($paylines as $l) {
-                        if ($result[$l[0]] == $result[$l[1]] && $result[$l[1]] == $result[$l[2]]) {
-                            if (!($l[0] == $paylines[$chosenLine][0] && $l[1] == $paylines[$chosenLine][1])) {
-                                $result[$l[2]] = random_int(2, 7); 
-                                $hasWin = true;
-                            }
-                        }
-                    }
-                } while($hasWin);
+        // If they are bleeding, increase the teaser rate to 70% to keep them highly addicted while losing
+        $teaserChance = $isBleeding ? 70 : 40; 
 
+        if (random_int(1, 100) <= $teaserChance) {
+            $isTeaser = true;
+            $isReachEye = (random_int(1, 100) <= 60); // 60% chance for a 2-symbol deep tease
+            
+            // Build the teaser board
+            for($i=0; $i<=6; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_1']);
+            for($i=1; $i<=7; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_2']);
+            for($i=2; $i<=8; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_3']);
+            
+            $chosenLine = array_rand($paylines);
+            $teaseSym = random_int(1, 3); // Tease high value symbols (1, 2, or 3)
+            
+            if ($isReachEye) {
+                $result[$paylines[$chosenLine][0]] = $teaseSym;
+                $result[$paylines[$chosenLine][1]] = $teaseSym;
+                // Force 3rd reel miss
+                do { $finalSym = random_int(1, 7); } while ($finalSym === $teaseSym);
+                $result[$paylines[$chosenLine][2]] = $finalSym;
             } else {
-                // 20% Chance: Mild Tease (1 GJP Symbol dead center)
-                for($i=0; $i<=6; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_1']);
-                for($i=1; $i<=7; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_2']);
-                for($i=2; $i<=8; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_3']);
-                
-                // Force exactly ONE GJP symbol in the center
-                $result[4] = 1; 
-                
-                // Ensure no other 1s exist to prevent accidental Reach
-                foreach ($result as $idx => $val) {
-                    if ($idx !== 4 && $val === 1) $result[$idx] = random_int(2, 7);
-                }
-                
-                // Ensure no accidental win lines
-                do {
-                    $hasWin = false;
-                    foreach($paylines as $l) {
-                        if ($result[$l[0]] == $result[$l[1]] && $result[$l[1]] == $result[$l[2]]) {
-                            $result[$l[2]] = random_int(2, 7); // break the win
-                            $hasWin = true;
-                        }
-                    }
-                } while($hasWin);
+                $result[4] = $teaseSym; // Center tease
             }
         } else {
-            // Standard Loss: Just roll using independent spawn rates
-            do {
-                for($i=0; $i<=6; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_1']);
-                for($i=1; $i<=7; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_2']);
-                for($i=2; $i<=8; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_3']);
-                
-                $hasWin = false;
-                foreach($paylines as $l) { if ($result[$l[0]] == $result[$l[1]] && $result[$l[1]] == $result[$l[2]]) { $hasWin = true; break; } }
-            } while($hasWin);
+            // Standard Loss Drop
+            for($i=0; $i<=6; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_1']);
+            for($i=1; $i<=7; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_2']);
+            for($i=2; $i<=8; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_3']);
         }
+
+        // FAILSAFE: Ensure no accidental win lines formed by RNG
+        $failsafeLoops = 0;
+        do {
+            $hasWin = false;
+            foreach($paylines as $l) {
+                if ($result[$l[0]] == $result[$l[1]] && $result[$l[1]] == $result[$l[2]]) {
+                    $result[$l[2]] = ($result[$l[2]] % 7) + 1; // Shift symbol by 1 to break win
+                    $hasWin = true;
+                }
+            }
+            $failsafeLoops++;
+        } while($hasWin && $failsafeLoops < 10);
     }
 
     // --- PHASE 6: PAYOUT ASSIGNMENT ---
@@ -297,6 +286,7 @@ try {
         
         $basePayout = $betAmount * $mult;
         
+        // Optional Event Multipliers
         $stmtEvent = $pdo->prepare("SELECT multiplier FROM marketing_events WHERE is_active = 1 AND start_time <= NOW() AND end_time > NOW() LIMIT 1");
         $stmtEvent->execute();
         $eventMult = $stmtEvent->fetchColumn() ?: 1.0;
@@ -304,7 +294,6 @@ try {
         $spinWin = $basePayout * $eventMult;
     }
 
-    // Decrease bonus/free counts
     $newFreeSpins = ($freeSpins > 0 && $winSym !== 7) ? $freeSpins - 1 : $freeSpins;
     if ($bonusSpinsLeft > 0) {
         $bonusSpinsLeft--;
@@ -346,9 +335,10 @@ try {
     $pdo->prepare("UPDATE machines SET total_laps = total_laps + 1, total_payout = total_payout + ?, session_token = ?, free_spins = ?, bonus_mode = ?, bonus_spins_left = ?, laps_since_bonus = ?, session_spins = ?, session_win_streak = ?, last_played_at = NOW() WHERE id = ?")
         ->execute([($spinWin + $vaultSiphon), $currentToken, $newFreeSpins, $bonusMode, $bonusSpinsLeft, $lapsSinceBonus, $sessionSpins, $sessionWinStreak, $machineId]);
     
-    $pdo->prepare("INSERT INTO game_logs (user_id, machine_id, bet, win, result, xp_earned) VALUES (?, ?, ?, ?, ?, ?)")->execute([$userId, $machineId, $actualBetDeducted, $spinWin, json_encode($result), $xpGain]);
+    $pdo->prepare("INSERT INTO game_logs (user_id, machine_id, bet, win, result, xp_earned) VALUES (?, ?, ?, ?, ?, ?)")->execute([$userId, $actualBetDeducted, $spinWin, json_encode($result), $xpGain]);
 
     $pdo->commit();
+    
     $finalBal = $pdo->query("SELECT balance FROM users WHERE id = $userId")->fetchColumn();
 
     // --- PHASE 8: DATA PAYLOAD ---
