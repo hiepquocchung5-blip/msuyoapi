@@ -437,3 +437,27 @@ INSERT IGNORE INTO `reel_spawn_rates` (`island_id`, `reel_index`, `sym_1`, `sym_
 (3, 1, 8,  35, 90,  210, 210, 240, 210), (3, 2, 4, 25, 70, 230, 230, 230, 210), (3, 3, 1, 15, 50, 260, 260, 200, 210),
 (4, 1, 12, 42, 105, 195, 195, 255, 195), (4, 2, 6, 32, 85, 215, 215, 248, 195), (4, 3, 3, 22, 65, 245, 245, 215, 195),
 (5, 1, 10, 40, 100, 200, 200, 250, 200), (5, 2, 5, 30, 80, 220, 220, 245, 200), (5, 3, 2, 20, 60, 250, 250, 218, 200);
+
+-- ============================================================================
+-- SUROPARA V3: INDEPENDENT ESCALATING GRAND JACKPOTS
+-- ============================================================================
+
+-- 1. Add the necessary control columns to the global_jackpots table
+ALTER TABLE `global_jackpots` 
+ADD COLUMN IF NOT EXISTS `island_id` INT DEFAULT NULL UNIQUE,
+ADD COLUMN IF NOT EXISTS `base_seed` DECIMAL(20,2) DEFAULT 3000000.00,
+ADD COLUMN IF NOT EXISTS `trigger_amount` DECIMAL(20,2) DEFAULT 3600000.00,
+ADD COLUMN IF NOT EXISTS `max_amount` DECIMAL(20,2) DEFAULT 7200000.00;
+
+-- 2. Clear old generic jackpots (Optional, but ensures a clean V3 start)
+TRUNCATE TABLE `global_jackpots`;
+
+-- 3. Insert the 5 Island-Specific Jackpots with escalating thresholds
+INSERT IGNORE INTO `global_jackpots` 
+(`name`, `island_id`, `current_amount`, `contribution_rate`, `base_seed`, `trigger_amount`, `max_amount`) 
+VALUES
+('Kyoto Zen GJP',       1, 3000000.00,  0.010, 3000000.00,  3600000.00,  7200000.00),
+('Okinawa Tropic GJP',  2, 4000000.00,  0.015, 4000000.00,  4500000.00,  8100000.00),
+('Osaka Neon GJP',      3, 5000000.00,  0.020, 5000000.00,  6000000.00, 10000000.00),
+('Tokyo Cyber GJP',     4, 7500000.00,  0.025, 7500000.00,  9000000.00, 15000000.00),
+('Ginza Gold GJP',      5, 10000000.00, 0.030, 10000000.00, 12000000.00, 20000000.00);

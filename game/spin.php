@@ -1,12 +1,12 @@
 <?php
 // ============================================================================
-// SUROPARA V3.5 - PROFESSIONAL REEL & GJP ENGINE
+// SUROPARA V4.0 - OMNI-GOD SPIN ENGINE (DYNAMIC GJP ALGORITHM)
 // ----------------------------------------------------------------------------
 // FEATURES:
 // 1. DB-Driven Independent Reel Spawn Rates (Ultimate Admin Control).
-// 2. 5 Independent Grand Jackpots (One per Island).
-// 3. Strict 50/50 GJP Near-Miss Algorithm (80% 2-Reel Tease, 20% 1-Reel Tease).
-// 4. Pure RTP Math Model.
+// 2. Escalating Grand Jackpots with Thermal Compression Odds.
+// 3. Must-Hit-By Cap Enforcer.
+// 4. Strict 50/50 GJP Near-Miss Algorithm (80% 2-Reel Tease, 20% 1-Reel Tease).
 // ============================================================================
 
 $allowedOrigin = "https://suropara.com";
@@ -82,13 +82,16 @@ try {
         $pdo->prepare("UPDATE users SET balance = balance - ?, pnl_lifetime = pnl_lifetime + ? WHERE id = ?")->execute([$actualBetDeducted, $actualBetDeducted, $userId]);
     }
 
-    // --- PHASE 3: ISLAND SPECIFIC GRAND JACKPOT ---
-    $stmtJp = $pdo->prepare("SELECT current_amount, contribution_rate FROM global_jackpots WHERE island_id = ? FOR UPDATE");
+    // --- PHASE 3: ISLAND SPECIFIC DYNAMIC GRAND JACKPOT ---
+    $stmtJp = $pdo->prepare("SELECT current_amount, contribution_rate, base_seed, trigger_amount, max_amount FROM global_jackpots WHERE island_id = ? FOR UPDATE");
     $stmtJp->execute([$islandId]);
     $gjpData = $stmtJp->fetch();
     
-    $currentJackpot = (float)($gjpData['current_amount'] ?? 1000000);
+    $currentJackpot = (float)($gjpData['current_amount'] ?? 3000000);
     $gjpRate = (float)($gjpData['contribution_rate'] ?? 0.05);
+    $gjpBase = (float)($gjpData['base_seed'] ?? 3000000);
+    $gjpTrigger = (float)($gjpData['trigger_amount'] ?? 3600000);
+    $gjpMax = (float)($gjpData['max_amount'] ?? 7200000);
 
     if ($actualBetDeducted > 0) {
         $jackpotFeed = $actualBetDeducted * $gjpRate;
@@ -137,12 +140,32 @@ try {
     // Core Hit Check
     $isHit = random_int(1, 10000) <= (int)($baseRtp * 100);
     
-    // GJP Hit Check (Extremely Rare)
+    // --- ADVANCED GJP ALGORITHM: THERMAL COMPRESSION & MUST-HIT ---
     $isGrandJackpot = false;
-    $gjpOdds = max(500, (int)(20000000 / max(1, $betAmount))); 
-    if (!$isFreeSpin && !$bonusMode && random_int(1, $gjpOdds) === 1) {
-        $isGrandJackpot = true;
-        $isHit = true;
+    
+    if (!$isFreeSpin && !$bonusMode) {
+        if ($currentJackpot >= $gjpMax) {
+            // Must-Hit-By Cap Reached. Guaranteed Drop!
+            $isGrandJackpot = true;
+        } else {
+            // Dynamic Odds Calculation
+            // Base mathematical probability (e.g., 1 in 15 Million scaled by bet size)
+            $baseOdds = max(500, (int)(15000000 / max(1, $betAmount))); 
+            
+            if ($currentJackpot >= $gjpTrigger) {
+                // Hot Zone: Thermal Compression Logic
+                // As the pot grows from Trigger towards Max, the odds shrink exponentially
+                $progressToCap = ($currentJackpot - $gjpTrigger) / max(1, ($gjpMax - $gjpTrigger));
+                // Compress odds (e.g., 0% progress = base odds, 99% progress = 1 in 2 odds)
+                $baseOdds = max(2, (int)($baseOdds * (1 - $progressToCap)));
+            }
+
+            if (random_int(1, $baseOdds) === 1) {
+                $isGrandJackpot = true;
+            }
+        }
+        
+        if ($isGrandJackpot) $isHit = true; // Override normal hit calc if GJP lands
     }
 
     $result = array_fill(0, 9, 0);
@@ -154,9 +177,10 @@ try {
     if ($isGrandJackpot) {
         // GJP WIN
         $spinWin += $currentJackpot;
-        $pdo->prepare("UPDATE global_jackpots SET current_amount = 1000000.00, last_won_by = ?, last_won_amount = ?, last_won_at = NOW() WHERE island_id = ?")->execute([$freshUser['username'], $currentJackpot, $islandId]);
+        // Dynamically reset the jackpot to this island's specific Base Seed
+        $pdo->prepare("UPDATE global_jackpots SET current_amount = base_seed, last_won_by = ?, last_won_amount = ?, last_won_at = NOW() WHERE island_id = ?")->execute([$freshUser['username'], $currentJackpot, $islandId]);
         $pdo->prepare("INSERT INTO chat_messages (type, message, is_pinned) VALUES ('jackpot', ?, 1)")
-            ->execute(["🚨 GRAND JACKPOT! {$freshUser['username']} just won " . number_format($currentJackpot) . " MMK on Island #{$islandId}! 🚨"]);
+            ->execute(["🚨 GRAND JACKPOT! {$freshUser['username']} just won " . number_format($currentJackpot) . " MMK! 🚨"]);
 
         for ($i=0; $i<9; $i++) $result[$i] = random_int(4, 7);
         $chosenLine = array_rand($paylines);
