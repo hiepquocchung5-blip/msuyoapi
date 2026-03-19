@@ -5,7 +5,7 @@
 // 1. Core stream settings
 set_time_limit(0);
 ignore_user_abort(true);
-header('Content-Type: text/event-stream');
+// header('Content-Type: text/event-stream');
 header('Cache-Control: no-cache, must-revalidate');
 header('Connection: keep-alive');
 require_once __DIR__ . '/../utils/auth_middleware.php';
