@@ -5,8 +5,12 @@
 
 require_once __DIR__ . '/../config/db.php';
 
-header("Access-Control-Allow-Origin: https://suropara.com"); 
+$allowedOrigin = "https://suropara.com";
+header("Access-Control-Allow-Origin: $allowedOrigin"); 
 header("Content-Type: application/json; charset=UTF-8");
+header("Access-Control-Allow-Methods: POST, GET, OPTIONS");
+header("Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With");
+header("Access-Control-Allow-Credentials: true");
 header("Cache-Control: no-cache, no-store, must-revalidate"); 
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
