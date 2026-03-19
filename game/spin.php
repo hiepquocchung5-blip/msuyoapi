@@ -3,9 +3,9 @@
 // SUROPARA V4.5 - LEVIATHAN SPIN ENGINE (REAL-WORLD P&L CONTROL)
 // ----------------------------------------------------------------------------
 // FEATURES:
-// 1. DB-Driven Independent Reel Spawn Rates.
+// 1. DB-Driven Independent Reel Spawn Rates with Dynamic Multiplication.
 // 2. Escalating Grand Jackpots with Thermal Compression Odds.
-// 3. Leviathan P&L Clamp: Dynamically forces a ~70% RTP based on user deposits.
+// 3. Leviathan P&L Clamp: Auto-adjusts within a -3% to +3% margin of DB target.
 // 4. Psychological Bleeding: Substitutes big wins for teasers if user is too lucky.
 // ============================================================================
 
@@ -76,10 +76,13 @@ try {
         $freshUser['balance'] -= $actualBetDeducted; // Update local variable for math
     }
 
-    // --- PHASE 3: LEVIATHAN P&L CLAMP (THE 70% ENFORCER) ---
+    // --- PHASE 3: LEVIATHAN AUTO-RTP CLAMP (-3% to +3% MARGIN) ---
     $stmtIsland = $pdo->prepare("SELECT rtp_rate FROM islands WHERE id = ?");
     $stmtIsland->execute([$islandId]);
-    $targetRtpPercent = (float)$stmtIsland->fetchColumn(); // Usually 70.0
+    $targetRtpPercent = (float)$stmtIsland->fetchColumn(); // e.g. 70.0%
+    
+    $rtpUpperBound = $targetRtpPercent + 3.0; // 73.0%
+    $rtpLowerBound = $targetRtpPercent - 3.0; // 67.0%
 
     // Fetch Lifetime Deposits & Withdrawals
     $stmtFin = $pdo->prepare("
@@ -94,33 +97,32 @@ try {
     $totalDeposited = (float)$fin['total_dep'];
     $totalWithdrawn = (float)$fin['total_with'];
     
-    $isBleeding = false;
+    $machineState = 'NEUTRAL'; // HOT, COLD, or NEUTRAL
     $baseHitFreq = 22.0; // Standard 22% chance to hit *something*
 
     if ($totalDeposited == 0) {
         // Free/Bonus Money Player: Cap them hard so they don't drain the house without depositing
-        if ($freshUser['balance'] > 20000) {
-            $isBleeding = true;
+        if ($freshUser['balance'] > 15000) {
+            $machineState = 'COLD';
             $baseHitFreq = 10.0; // Starve them out
         }
     } else {
-        // Paying Player: Enforce the RTP Target (e.g. 70% of Deposits)
+        // Calculate Actual User RTP: (Current Balance + Total Withdrawn) / Total Deposited
         $totalExtractedValue = $freshUser['balance'] + $totalWithdrawn;
-        $maxAllowedValue = $totalDeposited * ($targetRtpPercent / 100);
+        $currentRtpPercent = ($totalExtractedValue / $totalDeposited) * 100;
         
-        if ($totalExtractedValue > $maxAllowedValue) {
-            // Player is beating the 70% target. Clamp their payouts.
-            $isBleeding = true;
-            // We keep hit frequency mostly normal so they don't realize it's rigged, 
-            // but we will force the wins to be tiny later.
-            $baseHitFreq = 18.0; 
-        } elseif ($totalExtractedValue < ($totalDeposited * 0.30)) {
-            // Player is losing too fast (< 30% retention). Boost them to keep them hooked.
-            $baseHitFreq = 30.0;
+        if ($currentRtpPercent > $rtpUpperBound) {
+            // Player is beating the upper margin. CLAMP DOWN.
+            $machineState = 'COLD';
+            $baseHitFreq = 16.0; // Tighter wins
+        } elseif ($currentRtpPercent < $rtpLowerBound) {
+            // Player is losing too fast. BOOST THEM.
+            $machineState = 'HOT';
+            $baseHitFreq = 28.0; // Looser wins to bring them back up
         }
     }
 
-    // --- PHASE 4: ISLAND GJP & DB SPAWN RATES ---
+    // --- PHASE 4: ISLAND GJP & DYNAMIC SPAWN RATE MANIPULATION ---
     $stmtJp = $pdo->prepare("SELECT current_amount, contribution_rate, max_amount, trigger_amount, base_seed FROM global_jackpots WHERE island_id = ? FOR UPDATE");
     $stmtJp->execute([$islandId]);
     $gjpData = $stmtJp->fetch();
@@ -145,6 +147,22 @@ try {
             $reelSpawnRates['reel_'.$r['reel_index']] = [
                 1=>(int)$r['sym_1'], 2=>(int)$r['sym_2'], 3=>(int)$r['sym_3'], 4=>(int)$r['sym_4'], 5=>(int)$r['sym_5'], 6=>(int)$r['sym_6'], 7=>(int)$r['sym_7']
             ];
+        }
+    }
+
+    // DYNAMIC SPAWN RATE MODIFIERS based on Hot/Cold State
+    foreach ($reelSpawnRates as $reelKey => &$weights) {
+        if ($machineState === 'COLD') {
+            // Starve the reels of premium symbols, flood with Cherries and Replays
+            $weights[1] = max(1, (int)($weights[1] * 0.1)); // Nerf 7s
+            $weights[2] = max(1, (int)($weights[2] * 0.2)); // Nerf Chars
+            $weights[3] = max(1, (int)($weights[3] * 0.5)); // Nerf BARs
+            $weights[6] = (int)($weights[6] * 1.5);         // Boost Cherries
+        } elseif ($machineState === 'HOT') {
+            // Loosen up the reels for premium drops
+            $weights[2] = (int)($weights[2] * 1.5);         // Boost Chars
+            $weights[3] = (int)($weights[3] * 1.5);         // Boost BARs
+            $weights[4] = (int)($weights[4] * 1.2);         // Boost Bells
         }
     }
 
@@ -198,21 +216,23 @@ try {
         $winSym = 1;
 
     } elseif ($isHit) {
-        // --- TRICKY WIN LOGIC (THE BLEED STATE) ---
+        // --- DYNAMIC WIN LOGIC ---
         // Standard win weights
         $winSymWeights = [2=>5, 3=>10, 4=>25, 5=>20, 6=>25, 7=>15];
         
         if ($bonusMode === 'HEAVEN') {
             $winSymWeights = [2=>40, 3=>60]; 
-        } elseif ($isBleeding && !$bonusMode) {
-            // The Clamp: Force the user to only win small amounts (Cherries/Replays)
-            // They feel like they are hitting, but their balance is draining.
+        } elseif ($machineState === 'COLD' && !$bonusMode) {
+            // The Bleed Clamp: Force the user to only win small amounts (Cherries/Replays)
             $winSymWeights = [4=>5, 5=>5, 6=>70, 7=>20]; 
+        } elseif ($machineState === 'HOT' && !$bonusMode) {
+            // The Generous State: Give back mid/high wins to bump RTP up
+            $winSymWeights = [2=>15, 3=>25, 4=>20, 5=>20, 6=>10, 7=>10]; 
         }
         
         $winSym = $rollReel($winSymWeights);
         
-        // Populate base board with real spawn rates
+        // Populate base board with dynamically adjusted spawn rates
         for($i=0; $i<=6; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_1']);
         for($i=1; $i<=7; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_2']);
         for($i=2; $i<=8; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_3']);
@@ -225,11 +245,11 @@ try {
         $winningLines[] = $chosenLine;
 
     } else {
-        // --- LOSS LOGIC & ENHANCED TEASERS ---
+        // --- LOSS LOGIC & PSYCHOLOGICAL TEASERS ---
         $winSym = 0;
         
-        // If they are bleeding, increase the teaser rate to 70% to keep them highly addicted while losing
-        $teaserChance = $isBleeding ? 70 : 40; 
+        // If they are COLD (bleeding), increase teaser rate to 70% to keep them highly addicted while losing
+        $teaserChance = ($machineState === 'COLD') ? 70 : 40; 
 
         if (random_int(1, 100) <= $teaserChance) {
             $isTeaser = true;
@@ -335,7 +355,7 @@ try {
     $pdo->prepare("UPDATE machines SET total_laps = total_laps + 1, total_payout = total_payout + ?, session_token = ?, free_spins = ?, bonus_mode = ?, bonus_spins_left = ?, laps_since_bonus = ?, session_spins = ?, session_win_streak = ?, last_played_at = NOW() WHERE id = ?")
         ->execute([($spinWin + $vaultSiphon), $currentToken, $newFreeSpins, $bonusMode, $bonusSpinsLeft, $lapsSinceBonus, $sessionSpins, $sessionWinStreak, $machineId]);
     
-    $pdo->prepare("INSERT INTO game_logs (user_id, machine_id, bet, win, result, xp_earned) VALUES (?, ?, ?, ?, ?, ?)")->execute([$userId, $actualBetDeducted, $spinWin, json_encode($result), $xpGain]);
+    $pdo->prepare("INSERT INTO game_logs (user_id, machine_id, bet, win, result, xp_earned) VALUES (?, ?, ?, ?, ?, ?)")->execute([$userId, $machineId, $actualBetDeducted, $spinWin, json_encode($result), $xpGain]);
 
     $pdo->commit();
     
