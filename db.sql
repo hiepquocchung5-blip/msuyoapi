@@ -461,3 +461,24 @@ VALUES
 ('Osaka Neon GJP',      3, 5000000.00,  0.020, 5000000.00,  6000000.00, 10000000.00),
 ('Tokyo Cyber GJP',     4, 7500000.00,  0.025, 7500000.00,  9000000.00, 15000000.00),
 ('Ginza Gold GJP',      5, 10000000.00, 0.030, 10000000.00, 12000000.00, 20000000.00);
+
+-- ============================================================================
+-- SUROPARA V5.1 - DYNAMIC SYMBOL PAYOUTS
+-- Decouples win multipliers from PHP and puts them in the DB for Admin control
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS `island_symbol_payouts` (
+    `island_id` BIGINT(20) UNSIGNED NOT NULL,
+    `sym_1_mult` DECIMAL(8,2) NOT NULL DEFAULT 100.00,  -- GJP / 7s
+    `sym_2_mult` DECIMAL(8,2) NOT NULL DEFAULT 20.00,   -- Character (High Tier)
+    `sym_3_mult` DECIMAL(8,2) NOT NULL DEFAULT 10.00,   -- BAR (Bonus Trigger)
+    `sym_4_mult` DECIMAL(8,2) NOT NULL DEFAULT 10.00,   -- Bell
+    `sym_5_mult` DECIMAL(8,2) NOT NULL DEFAULT 15.00,   -- Melon
+    `sym_6_mult` DECIMAL(8,2) NOT NULL DEFAULT 2.00,    -- Cherry (Bleed Filler)
+    `sym_7_mult` DECIMAL(8,2) NOT NULL DEFAULT 0.00,    -- Replay (Free Spin)
+    PRIMARY KEY (`island_id`),
+    CONSTRAINT `fk_payouts_island` FOREIGN KEY (`island_id`) REFERENCES `islands` (`id`) ON DELETE CASCADE
+);
+
+-- Seed defaults for the 5 V3 Islands
+INSERT IGNORE INTO `island_symbol_payouts` (`island_id`) VALUES (1), (2), (3), (4), (5);
