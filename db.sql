@@ -469,16 +469,42 @@ VALUES
 
 CREATE TABLE IF NOT EXISTS `island_symbol_payouts` (
     `island_id` BIGINT(20) UNSIGNED NOT NULL,
-    `sym_1_mult` DECIMAL(8,2) NOT NULL DEFAULT 100.00,  -- GJP / 7s
-    `sym_2_mult` DECIMAL(8,2) NOT NULL DEFAULT 20.00,   -- Character (High Tier)
-    `sym_3_mult` DECIMAL(8,2) NOT NULL DEFAULT 10.00,   -- BAR (Bonus Trigger)
-    `sym_4_mult` DECIMAL(8,2) NOT NULL DEFAULT 10.00,   -- Bell
-    `sym_5_mult` DECIMAL(8,2) NOT NULL DEFAULT 15.00,   -- Melon
-    `sym_6_mult` DECIMAL(8,2) NOT NULL DEFAULT 2.00,    -- Cherry (Bleed Filler)
-    `sym_7_mult` DECIMAL(8,2) NOT NULL DEFAULT 0.00,    -- Replay (Free Spin)
+    `sym_1_mult` DECIMAL(16,8) NOT NULL DEFAULT 100.00000000,  -- GJP / 7s
+    `sym_2_mult` DECIMAL(16,8) NOT NULL DEFAULT 20.00000000,   -- Character (High Tier)
+    `sym_3_mult` DECIMAL(16,8) NOT NULL DEFAULT 10.00000000,   -- BAR (Bonus Trigger)
+    `sym_4_mult` DECIMAL(16,8) NOT NULL DEFAULT 10.00000000,   -- Bell
+    `sym_5_mult` DECIMAL(16,8) NOT NULL DEFAULT 15.00000000,   -- Melon
+    `sym_6_mult` DECIMAL(16,8) NOT NULL DEFAULT 2.00000000,    -- Cherry (Bleed Filler)
+    `sym_7_mult` DECIMAL(16,8) NOT NULL DEFAULT 0.00000000,    -- Replay (Free Spin)
     PRIMARY KEY (`island_id`),
     CONSTRAINT `fk_payouts_island` FOREIGN KEY (`island_id`) REFERENCES `islands` (`id`) ON DELETE CASCADE
 );
 
 -- Seed defaults for the 5 V3 Islands
-INSERT IGNORE INTO `island_symbol_payouts` (`island_id`) VALUES (1), (2), (3), (4), (5);
+INSERT IGNORE INTO `island_symbol_payouts` (`island_id`) VALUES (1), (2), (3), (4), (5);  
+
+-- ============================================================================
+-- SUROPARA V5.4 - DATABASE MIGRATION SCRIPT
+-- Replaces the auto-migration logic previously embedded in spin.php
+-- ============================================================================
+
+-- 1. Inject Session Financial Tracking into machines table if missing
+ALTER TABLE `machines` ADD COLUMN IF NOT EXISTS `session_in` DECIMAL(16,2) DEFAULT 0.00;
+ALTER TABLE `machines` ADD COLUMN IF NOT EXISTS `session_out` DECIMAL(16,2) DEFAULT 0.00;
+
+-- 2. Create the New Win Rate Control Table with Strict Foreign Keys
+CREATE TABLE IF NOT EXISTS `island_win_rates` (
+    `island_id` BIGINT(20) UNSIGNED PRIMARY KEY,
+    `base_hit_rate` DECIMAL(5,2) NOT NULL DEFAULT 22.00,
+    `max_rtp_cap` DECIMAL(5,2) NOT NULL DEFAULT 95.00,
+    `burst_volatility` DECIMAL(5,2) NOT NULL DEFAULT 1.50,
+    CONSTRAINT `fk_win_rates_island` FOREIGN KEY (`island_id`) REFERENCES `islands` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 3. Seed defaults if empty
+INSERT IGNORE INTO `island_win_rates` (`island_id`, `base_hit_rate`, `max_rtp_cap`, `burst_volatility`) VALUES 
+    (1, 25.00, 98.00, 1.20), 
+    (2, 22.00, 95.00, 1.50), 
+    (3, 18.00, 92.00, 2.00), 
+    (4, 20.00, 94.00, 1.80), 
+    (5, 15.00, 90.00, 3.00);
