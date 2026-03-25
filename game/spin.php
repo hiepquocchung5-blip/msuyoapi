@@ -13,7 +13,7 @@
 
 // --- STRICT CORS & PRE-FLIGHT HANDLING ---
 $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
-$allowedHosts = ['suropara.com', 'm.suropara.com', 'localhost'];
+$allowedHosts = ['suropara.com'];
 $parsedHost = parse_url($origin, PHP_URL_HOST);
 
 if ($parsedHost && in_array($parsedHost, $allowedHosts)) {
