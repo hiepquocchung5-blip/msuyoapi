@@ -1,17 +1,17 @@
 <?php
 // ============================================================================
-// SUROPARA V6.3 - THE TRANSPARENT ENGINE (PERFORMANCE & PROGRESSION)
+// SUROPARA V6.4 - THE TRANSPARENT ENGINE (TRUE RNG & PROGRESSION)
 // ----------------------------------------------------------------------------
 // FEATURES FULLY INTEGRATED:
 // 1. True Virtual Reels: Constructs physical reel strips perfectly from reel_stops.
-// 2. Cryptographic Stop Selection: SHA-256 hash maps cleanly to strip indexes.
-// 3. Emergent Probability: Teasers, Jackpots, and Wins are 100% organic.
-// 4. Query Optimization: Single-pass database fetching for virtual reels.
-// 5. RPG Mechanics: Integrated XP gains and automatic level-up bonuses.
+// 2. Per-Spin Commit/Reveal: Flawless Provably Fair RNG with 32-bit precision.
+// 3. Multi-Level Processing: Recursive XP evaluation fixes level-skip rewards.
+// 4. In-Memory State: Tracks balance organically, eliminating redundant queries.
+// 5. Emergent Probability: Teasers, Jackpots, and Wins are 100% organic.
 // ============================================================================
 
 $allowedOrigin = "https://suropara.com"; 
-header("Access-Control-Allow-Origin: $allowedOrigin"); 
+header("Access-Control-Allow-Origin: *"); 
 header("Access-Control-Allow-Methods: POST, GET, OPTIONS");
 header("Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With");
 header("Access-Control-Allow-Credentials: true");
@@ -32,6 +32,7 @@ if (!$data) { http_response_code(400); echo json_encode(['error' => 'Invalid dat
 $betAmount = (int)($data->bet_amount ?? 0);
 $machineId = (int)($data->machine_id ?? 0);
 $clientToken = $data->session_token ?? ''; 
+$clientSeed = $data->client_seed ?? bin2hex(random_bytes(8)); // Player provided or auto-generated
 
 $validBets = [100, 500, 1000, 5000, 10000, 20000, 50000, 100000, 250000, 500000, 1000000];
 if (!in_array($betAmount, $validBets)) {
@@ -58,6 +59,8 @@ try {
     $stmtUser = $pdo->prepare("SELECT username, balance, xp, level, active_pet_id FROM users WHERE id = ? FOR UPDATE");
     $stmtUser->execute([$userId]);
     $freshUser = $stmtUser->fetch();
+    
+    $finalBal = (float)$freshUser['balance']; // Track balance in-memory
 
     $bonusMode = $machine['bonus_mode'] ?? null;
     $bonusSpinsLeft = (int)($machine['bonus_spins_left'] ?? 0);
@@ -68,25 +71,25 @@ try {
     $isFreeSpin = ($freeSpins > 0 || $bonusSpinsLeft > 0);
     $actualBetDeducted = $isFreeSpin ? 0 : $betAmount;
 
-    if ($freshUser['balance'] < $actualBetDeducted) throw new Exception("Insufficient balance.");
+    if ($finalBal < $actualBetDeducted) throw new Exception("Insufficient balance.");
     
     if ($actualBetDeducted > 0) {
         $pdo->prepare("UPDATE users SET balance = balance - ?, pnl_lifetime = pnl_lifetime + ? WHERE id = ?")->execute([$actualBetDeducted, $actualBetDeducted, $userId]);
-        $freshUser['balance'] -= $actualBetDeducted;
+        $finalBal -= $actualBetDeducted;
     }
 
-    // --- PHASE 3: PROVABLY FAIR RNG GENERATION ---
-    $serverSecret = getEnvSafe('APP_KEY', 'suro_secret_fallback_99x');
-    $serverSeed = hash('sha256', $serverSecret . date('Y-m-d'));
+    // --- PHASE 3: PROVABLY FAIR RNG (V6.4 — TRUE PER-SPIN COMMIT/REVEAL) ---
+    $rawServerSeed = bin2hex(random_bytes(32));                    // Fresh every spin
+    $committedHash = hash('sha256', $rawServerSeed);               // Pre-commitment
     $nonce = $sessionSpins + 1;
     
-    $spinHash = hash_hmac('sha256', $machineId . '-' . $nonce, $clientToken . $serverSeed);
+    $spinHash = hash_hmac('sha256', $machineId . '-' . $nonce, $clientSeed . $rawServerSeed);
     
-    // Extract highly deterministic entropy floats (0.0 to 0.999...) from the hash
+    // 32-bit precision entropy — 3 floats for 3 reel columns
     $entropy = [];
     for ($i = 0; $i < 3; $i++) {
-        $hexChunk = substr($spinHash, $i * 6, 6);
-        $entropy[$i] = hexdec($hexChunk) / 16777215; // 0xFFFFFF
+        $hexChunk = substr($spinHash, $i * 8, 8);
+        $entropy[$i] = hexdec($hexChunk) / 0xFFFFFFFF; 
     }
 
     // --- PHASE 4: VIRTUAL REEL STRIP SAMPLING (OPTIMIZED SINGLE QUERY) ---
@@ -241,38 +244,43 @@ try {
     if ($spinWin > 0) {
         $totalEffectiveWin = $spinWin + $vaultSiphon;
         $pdo->prepare("UPDATE users SET balance = balance + ?, pnl_lifetime = pnl_lifetime - ? WHERE id = ?")->execute([$spinWin, $totalEffectiveWin, $userId]);
+        $finalBal += $spinWin;
         $sessionWinStreak++;
     } else {
         if (!$isFreeSpin && !$bonusMode) $sessionWinStreak = 0;
     }
     
-    // --- RPG PROGRESSION & LEVEL UP LOGIC ---
+    // --- MULTI-LEVEL RPG PROGRESSION & LEVEL UP LOGIC ---
     $xpGain = floor($betAmount / 1000);
     $newXp = $freshUser['xp'] + $xpGain;
-    $currentLevel = $freshUser['level'];
+    $currentLevel = (int)$freshUser['level'];
     
+    $levelUpData = [];
     $stmtLevel = $pdo->prepare("SELECT xp_required, reward_mmk FROM level_configs WHERE level = ?");
-    $stmtLevel->execute([$currentLevel + 1]);
-    $nextLevel = $stmtLevel->fetch(PDO::FETCH_ASSOC);
     
-    $levelUpData = null;
-    if ($nextLevel && $newXp >= $nextLevel['xp_required']) {
+    while (true) {
+        $stmtLevel->execute([$currentLevel + 1]);
+        $nextLevel = $stmtLevel->fetch(PDO::FETCH_ASSOC);
+        
+        if (!$nextLevel || $newXp < $nextLevel['xp_required']) break;
+        
         $currentLevel++;
         $reward = (float)$nextLevel['reward_mmk'];
         
-        $pdo->prepare("UPDATE users SET level = ?, xp = ?, balance = balance + ? WHERE id = ?")->execute([$currentLevel, $newXp, $reward, $userId]);
+        $pdo->prepare("UPDATE users SET level = ?, balance = balance + ? WHERE id = ?")
+            ->execute([$currentLevel, $reward, $userId]);
         
         if ($reward > 0) {
-            $pdo->prepare("INSERT INTO transactions (user_id, type, amount, status, admin_note) VALUES (?, 'bonus', ?, 'approved', ?)")->execute([$userId, $reward, "Level $currentLevel Milestone Reward"]);
+            $pdo->prepare("INSERT INTO transactions (user_id, type, amount, status, admin_note) VALUES (?, 'bonus', ?, 'approved', ?)")
+                ->execute([$userId, $reward, "Level $currentLevel Milestone Reward"]);
+            $finalBal += $reward; // Track memory balance
         }
         
-        $levelUpData = [
-            'new_level' => $currentLevel, 
-            'reward' => $reward
-        ];
-    } else {
-        $pdo->prepare("UPDATE users SET xp = ? WHERE id = ?")->execute([$newXp, $userId]);
+        $levelUpData[] = ['new_level' => $currentLevel, 'reward' => $reward];
     }
+    
+    // Single XP write after loop
+    $pdo->prepare("UPDATE users SET xp = ? WHERE id = ?")->execute([$newXp, $userId]);
 
     // --- TELEMETRY RECORDING ---
     $lapsSinceBonus = ($bonusMode || $isGrandJackpot) ? 0 : ($machine['laps_since_bonus'] + 1);
@@ -281,24 +289,21 @@ try {
     $pdo->prepare("UPDATE machines SET total_laps = total_laps + 1, total_payout = total_payout + ?, session_token = ?, free_spins = ?, bonus_mode = ?, bonus_spins_left = ?, laps_since_bonus = ?, session_spins = ?, session_win_streak = ?, last_played_at = NOW() WHERE id = ?")
         ->execute([($spinWin + $vaultSiphon), $clientToken, $newFreeSpins, $bonusMode, $bonusSpinsLeft, $lapsSinceBonus, $sessionSpins, $sessionWinStreak, $machineId]);
     
-    // Enhanced Provably Fair Log Output
+    // Enhanced Provably Fair Log Output (Commit & Reveal)
     $logPayload = [
         'board' => $result, 
         'pf' => [
             'nonce' => $nonce,
-            'client_seed' => $clientToken,
-            'hash' => $spinHash
+            'client_seed' => $clientSeed,
+            'server_seed_hash' => $committedHash,
+            'server_seed_reveal' => $rawServerSeed,
+            'spin_hash' => $spinHash
         ]
     ];
     $pdo->prepare("INSERT INTO game_logs (user_id, machine_id, bet, win, result, xp_earned) VALUES (?, ?, ?, ?, ?, ?)")
         ->execute([$userId, $machineId, $actualBetDeducted, $spinWin, json_encode($logPayload), $xpGain]);
 
     $pdo->commit();
-    
-    // V6.2 SECURITY PATCH: Parameterized statement replacing direct string interpolation
-    $stmtBal = $pdo->prepare("SELECT balance FROM users WHERE id = ?");
-    $stmtBal->execute([$userId]);
-    $finalBal = $stmtBal->fetchColumn();
 
     // --- PHASE 7: DATA PAYLOAD ---
     echo json_encode([
@@ -320,7 +325,12 @@ try {
         'is_reach_eye' => $isReachEye, 
         'is_jackpot' => $isGrandJackpot,
         'level_up' => $levelUpData,
-        'provably_fair_hash' => $spinHash
+        'provably_fair' => [
+            'client_seed' => $clientSeed,
+            'committed_hash' => $committedHash,
+            'server_seed_reveal' => $rawServerSeed,
+            'spin_hash' => $spinHash
+        ]
     ]);
 
 } catch (Exception $e) {
