@@ -1,12 +1,13 @@
 <?php
 // ============================================================================
-// SUROPARA V6.2 - THE TRANSPARENT ENGINE (PURE MATHEMATICS)
+// SUROPARA V6.3 - THE TRANSPARENT ENGINE (PERFORMANCE & PROGRESSION)
 // ----------------------------------------------------------------------------
 // FEATURES FULLY INTEGRATED:
 // 1. True Virtual Reels: Constructs physical reel strips perfectly from reel_stops.
 // 2. Cryptographic Stop Selection: SHA-256 hash maps cleanly to strip indexes.
 // 3. Emergent Probability: Teasers, Jackpots, and Wins are 100% organic.
-// 4. Secure State: Failsafe PDO injections and zero post-spin manipulation.
+// 4. Query Optimization: Single-pass database fetching for virtual reels.
+// 5. RPG Mechanics: Integrated XP gains and automatic level-up bonuses.
 // ============================================================================
 
 $allowedOrigin = "https://suropara.com"; 
@@ -88,19 +89,22 @@ try {
         $entropy[$i] = hexdec($hexChunk) / 16777215; // 0xFFFFFF
     }
 
-    // --- PHASE 4: VIRTUAL REEL STRIP SAMPLING (PURE MATHEMATICS) ---
+    // --- PHASE 4: VIRTUAL REEL STRIP SAMPLING (OPTIMIZED SINGLE QUERY) ---
     $virtualReels = [1 => [], 2 => [], 3 => []];
-    $stmtStrip = $pdo->prepare("SELECT symbol_id FROM reel_stops WHERE island_id = ? AND reel_index = ? ORDER BY stop_pos ASC");
+    $stmtStrip = $pdo->prepare("SELECT reel_index, symbol_id FROM reel_stops WHERE island_id = ? ORDER BY reel_index ASC, stop_pos ASC");
+    $stmtStrip->execute([$islandId]);
+    $allStops = $stmtStrip->fetchAll(PDO::FETCH_ASSOC);
     
+    // Group physical stops by reel index
+    foreach ($allStops as $stop) {
+        $virtualReels[(int)$stop['reel_index']][] = (int)$stop['symbol_id'];
+    }
+
+    // Failsafe if DB hasn't been seeded yet
     for ($i = 1; $i <= 3; $i++) {
-        $stmtStrip->execute([$islandId, $i]);
-        $strip = $stmtStrip->fetchAll(PDO::FETCH_COLUMN);
-        
-        // Failsafe if DB hasn't been seeded yet (30 stop default strip)
-        if (empty($strip)) {
-            $strip = [6,4,2,6,5,3,6,7,6,4,2,6,5,3,6,7,6,2,4,6,5,7,6,3,1,6,4,5,6,7];
+        if (empty($virtualReels[$i])) {
+            $virtualReels[$i] = [6,4,2,6,5,3,6,7,6,4,2,6,5,3,6,7,6,2,4,6,5,7,6,3,1,6,4,5,6,7];
         }
-        $virtualReels[$i] = $strip;
     }
 
     // Cryptographic Index Mapping with Grid Wrap-Around (Top, Mid, Bot)
@@ -121,9 +125,9 @@ try {
         // [0, 1, 2]
         // [3, 4, 5]
         // [6, 7, 8]
-        $result[$colOffset]     = (int)$virtualReels[$i][$topIdx]; 
-        $result[$colOffset + 3] = (int)$virtualReels[$i][$stopIdx];    
-        $result[$colOffset + 6] = (int)$virtualReels[$i][$botIdx];     
+        $result[$colOffset]     = $virtualReels[$i][$topIdx]; 
+        $result[$colOffset + 3] = $virtualReels[$i][$stopIdx];    
+        $result[$colOffset + 6] = $virtualReels[$i][$botIdx];     
     }
 
     // --- PHASE 5: PAYOUTS & EMERGENT OBSERVATION ---
@@ -225,6 +229,7 @@ try {
         else $winTier = 'SMALL';
     }
 
+    // --- Vault & Financial Balance Core ---
     $vaultSiphon = ($spinWin >= ($betAmount * 50)) ? $spinWin * 0.05 : 0;
     $spinWin -= $vaultSiphon; 
     
@@ -241,17 +246,52 @@ try {
         if (!$isFreeSpin && !$bonusMode) $sessionWinStreak = 0;
     }
     
+    // --- RPG PROGRESSION & LEVEL UP LOGIC ---
     $xpGain = floor($betAmount / 1000);
-    $pdo->prepare("UPDATE users SET xp = xp + ? WHERE id = ?")->execute([$xpGain, $userId]);
+    $newXp = $freshUser['xp'] + $xpGain;
+    $currentLevel = $freshUser['level'];
+    
+    $stmtLevel = $pdo->prepare("SELECT xp_required, reward_mmk FROM level_configs WHERE level = ?");
+    $stmtLevel->execute([$currentLevel + 1]);
+    $nextLevel = $stmtLevel->fetch(PDO::FETCH_ASSOC);
+    
+    $levelUpData = null;
+    if ($nextLevel && $newXp >= $nextLevel['xp_required']) {
+        $currentLevel++;
+        $reward = (float)$nextLevel['reward_mmk'];
+        
+        $pdo->prepare("UPDATE users SET level = ?, xp = ?, balance = balance + ? WHERE id = ?")->execute([$currentLevel, $newXp, $reward, $userId]);
+        
+        if ($reward > 0) {
+            $pdo->prepare("INSERT INTO transactions (user_id, type, amount, status, admin_note) VALUES (?, 'bonus', ?, 'approved', ?)")->execute([$userId, $reward, "Level $currentLevel Milestone Reward"]);
+        }
+        
+        $levelUpData = [
+            'new_level' => $currentLevel, 
+            'reward' => $reward
+        ];
+    } else {
+        $pdo->prepare("UPDATE users SET xp = ? WHERE id = ?")->execute([$newXp, $userId]);
+    }
 
+    // --- TELEMETRY RECORDING ---
     $lapsSinceBonus = ($bonusMode || $isGrandJackpot) ? 0 : ($machine['laps_since_bonus'] + 1);
     $sessionSpins++;
 
     $pdo->prepare("UPDATE machines SET total_laps = total_laps + 1, total_payout = total_payout + ?, session_token = ?, free_spins = ?, bonus_mode = ?, bonus_spins_left = ?, laps_since_bonus = ?, session_spins = ?, session_win_streak = ?, last_played_at = NOW() WHERE id = ?")
         ->execute([($spinWin + $vaultSiphon), $clientToken, $newFreeSpins, $bonusMode, $bonusSpinsLeft, $lapsSinceBonus, $sessionSpins, $sessionWinStreak, $machineId]);
     
+    // Enhanced Provably Fair Log Output
+    $logPayload = [
+        'board' => $result, 
+        'pf' => [
+            'nonce' => $nonce,
+            'client_seed' => $clientToken,
+            'hash' => $spinHash
+        ]
+    ];
     $pdo->prepare("INSERT INTO game_logs (user_id, machine_id, bet, win, result, xp_earned) VALUES (?, ?, ?, ?, ?, ?)")
-        ->execute([$userId, $machineId, $actualBetDeducted, $spinWin, json_encode(['board' => $result, 'pf_hash' => $spinHash]), $xpGain]);
+        ->execute([$userId, $machineId, $actualBetDeducted, $spinWin, json_encode($logPayload), $xpGain]);
 
     $pdo->commit();
     
@@ -279,6 +319,7 @@ try {
         'is_teaser' => $isTeaser, 
         'is_reach_eye' => $isReachEye, 
         'is_jackpot' => $isGrandJackpot,
+        'level_up' => $levelUpData,
         'provably_fair_hash' => $spinHash
     ]);
 
