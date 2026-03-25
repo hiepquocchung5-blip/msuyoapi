@@ -1,17 +1,16 @@
 <?php
 // ============================================================================
-// SUROPARA V5.5 - OMNI-GOD SPIN ENGINE (THE LEVIATHAN DIRECTOR)
+// SUROPARA V5.6 - OMNI-GOD SPIN ENGINE (THE TRUE LEVIATHAN)
 // ----------------------------------------------------------------------------
 // FEATURES FULLY INTEGRATED:
-// 1. Extreme Precision RNG: 10-Billion scale to support 8 decimal hit rates.
-// 2. Dynamic RTP Calculus: Mathematically guarantees DB target RTP over 1M+ spins.
-// 3. Absolute RTP Hard-Cap: Impossible to exceed configured max RTP.
-// 4. Physics Engine: Applies mechanical slip/jitter to visual reel spawn rates.
-// 5. Psychological Bleeding & Teasers (High near-miss rates when cold).
+// 1. 24-Hour Rolling Memory: Prevents session-reset exploitation.
+// 2. Unchained GJP: Jackpots bypass RTP caps (Marketing Budget).
+// 3. Isolated GJP Spawns: Symbol 1 removed from natural RNG, strictly controlled.
+// 4. Illusion of Winning: Free players get hits, but capped at low-yield symbols.
 // ============================================================================
 
 $allowedOrigin = "https://suropara.com"; 
-header("Access-Control-Allow-Origin: *"); // Adjusted for local/dev environments. Set strictly in production.
+header("Access-Control-Allow-Origin: *"); 
 header("Access-Control-Allow-Methods: POST, GET, OPTIONS");
 header("Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With");
 header("Access-Control-Allow-Credentials: true");
@@ -82,9 +81,8 @@ try {
         $sessionIn += $actualBetDeducted;
     }
 
-    // --- PHASE 3: THE LEVIATHAN DIRECTOR (SESSION VS LIFETIME VOLATILITY) ---
+    // --- PHASE 3: THE TRUE LEVIATHAN DIRECTOR (24H ROLLING MEMORY) ---
     
-    // Fetch Extreme Precision Win Rate Controls (V5.5)
     $stmtRates = $pdo->prepare("SELECT * FROM island_win_rates WHERE island_id = ?");
     $stmtRates->execute([$islandId]);
     $winRateConfig = $stmtRates->fetch(PDO::FETCH_ASSOC);
@@ -93,7 +91,7 @@ try {
     $maxRtpCap = (float)($winRateConfig['max_rtp_cap'] ?? 95.00000000);
     $volatilityIndex = (float)($winRateConfig['burst_volatility'] ?? 1.50000000);
 
-    // Fetch Lifetime Financials
+    // Fetch Lifetime & 24H Financials to prevent session-spoofing
     $stmtFin = $pdo->prepare("
         SELECT 
             COALESCE(SUM(CASE WHEN type='deposit' THEN amount ELSE 0 END), 0) as total_dep,
@@ -103,42 +101,49 @@ try {
     $stmtFin->execute([$userId]);
     $fin = $stmtFin->fetch();
     
-    $totalDeposited = max(1, (float)$fin['total_dep']); // Prevent division by zero
+    $totalDeposited = max(1, (float)$fin['total_dep']); 
     $totalExtractedValue = $freshUser['balance'] + (float)$fin['total_with'];
     $lifetimeRTP = ($totalExtractedValue / $totalDeposited) * 100;
 
-    // Short-term Session RTP
-    $sessionRTP = $sessionIn > 0 ? ($sessionOut / $sessionIn) * 100 : 0;
+    // 24-Hour Rolling RTP Check (Defeats session reset exploit)
+    $stmt24h = $pdo->prepare("
+        SELECT COALESCE(SUM(bet), 0) as vol_in, COALESCE(SUM(win), 0) as vol_out 
+        FROM game_logs WHERE user_id = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+    ");
+    $stmt24h->execute([$userId]);
+    $rolling24h = $stmt24h->fetch();
+    $rollingRTP = $rolling24h['vol_in'] > 0 ? ($rolling24h['vol_out'] / $rolling24h['vol_in']) * 100 : 0;
+    $rollingSpins = $pdo->query("SELECT COUNT(*) FROM game_logs WHERE user_id = $userId AND created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)")->fetchColumn();
 
     // Director AI Logic
     $directorState = 'NEUTRAL';
     $dynamicHitRate = $targetHitRate;
 
-    // 1. Protection Protocol (Hard Ceiling)
+    // 1. Protection Protocol (Hard Ceiling on Lifetime)
     if ($lifetimeRTP >= $maxRtpCap) {
         $directorState = 'CAP_REJECT';
-        $dynamicHitRate = $targetHitRate * 0.3; // Tank the hit rate to 30% of normal
+        $dynamicHitRate = $targetHitRate * 0.3; // Tank hit rate
     } 
-    // 2. Short-Term Correction (The Player is bleeding too fast right now)
-    elseif ($sessionSpins > 20 && $sessionRTP < 30.0) {
+    // 2. Rolling Correction (Player bleeding too fast over last 24h, not just session)
+    elseif ($rollingSpins > 50 && $rollingRTP < 30.0) {
         $directorState = 'BURST';
-        $dynamicHitRate = $targetHitRate * $volatilityIndex; // Boost hit rate to trigger a relief win
+        $dynamicHitRate = $targetHitRate * $volatilityIndex; 
     } 
-    // 3. Gathering Phase (Player is doing okay, slowly bleed them down to target)
-    elseif ($sessionRTP > 150.0) {
+    // 3. Gathering Phase (Player running hot recently)
+    elseif ($rollingRTP > 120.0) {
         $directorState = 'GATHER';
-        $dynamicHitRate = $targetHitRate * 0.7; // Lower hit rate slightly
+        $dynamicHitRate = $targetHitRate * 0.7; 
     }
 
-    // Free player penalty (No deposits)
-    if ((float)$fin['total_dep'] === 0.0 && $freshUser['balance'] > 20000) {
-        $directorState = 'GATHER';
-        $dynamicHitRate = 5.0; // Extremely low win rate for free riders
+    // V5.6 Free Player Illusion Fix (No deposits)
+    $isFreePlayer = ((float)$fin['total_dep'] === 0.0);
+    if ($isFreePlayer && $freshUser['balance'] > 15000) {
+        $directorState = 'FREE_BLEED';
+        $dynamicHitRate = $targetHitRate * 0.9; // Keep hitting so it's fun
     }
 
-    // --- PHASE 4: DB-DRIVEN CONFIGS (GJP, SPAWN RATES & PAYOUT MULTIPLIERS) ---
+    // --- PHASE 4: UNCHAINED GJP & DYNAMIC MULTIPLIERS ---
     
-    // GJP Config
     $stmtJp = $pdo->prepare("SELECT current_amount, contribution_rate, max_amount, trigger_amount, base_seed FROM global_jackpots WHERE island_id = ? FOR UPDATE");
     $stmtJp->execute([$islandId]);
     $gjpData = $stmtJp->fetch();
@@ -149,7 +154,6 @@ try {
         $pdo->prepare("UPDATE global_jackpots SET current_amount = ? WHERE island_id = ?")->execute([$currentJackpot, $islandId]);
     }
 
-    // Payout Multipliers (V5.5 - High Precision)
     $stmtPayouts = $pdo->prepare("SELECT * FROM island_symbol_payouts WHERE island_id = ?");
     $stmtPayouts->execute([$islandId]);
     $dbPayouts = $stmtPayouts->fetch(PDO::FETCH_ASSOC);
@@ -168,67 +172,59 @@ try {
     if ($bonusMode === 'HEAVEN') {
         $winSymWeights = [2=>50, 3=>50]; 
     } elseif ($directorState === 'GATHER' || $directorState === 'CAP_REJECT') {
-        $winSymWeights = [4=>5, 5=>5, 6=>80, 7=>10]; // Force low-tier wins (Cherries/Replays)
+        $winSymWeights = [4=>5, 5=>5, 6=>80, 7=>10]; // Force low-tier
+    } elseif ($directorState === 'FREE_BLEED') {
+        $winSymWeights = [6=>85, 7=>15]; // Illusion of winning: Only Cherries and Replays
     } elseif ($directorState === 'BURST') {
-        $winSymWeights = [2=>30, 3=>30, 4=>20, 5=>10, 6=>5, 7=>5]; // Force high-tier relief wins
+        $winSymWeights = [2=>30, 3=>30, 4=>20, 5=>10, 6=>5, 7=>5]; // Force relief wins
     } else {
         $winSymWeights = [2=>5, 3=>10, 4=>25, 5=>20, 6=>25, 7=>15]; // Balanced
     }
 
-    // --- EXTREME PRECISION 10-BILLION SCALE RNG (V5.5) ---
-    // Ensure hit rate never drops below an absolute minimum to prevent divide-by-zero or freezing
+    // Note: Symbol 1 (GJP) is intentionally missing from $winSymWeights. It cannot roll naturally.
+
+    // Extreme Precision 10-Billion Scale RNG
     $finalHitRate = max(0.00000001, min(100.0, $dynamicHitRate));
     $isHit = (random_int(1, 10000000000) <= (int)($finalHitRate * 100000000));
     $isGrandJackpot = false;
     
-    // GJP Logic
+    // --- V5.6 UNCHAINED GJP LOGIC ---
     $gjpMax = (float)($gjpData['max_amount'] ?? 7200000);
     $gjpTrigger = (float)($gjpData['trigger_amount'] ?? 3600000);
     
     if (!$isFreeSpin && !$bonusMode) {
-        if ($currentJackpot >= $gjpMax) {
-            $isGrandJackpot = true; 
-        } else {
-            $baseOdds = max(500, (int)(15000000 / max(1, $betAmount))); 
-            if ($currentJackpot >= $gjpTrigger) {
-                $progress = ($currentJackpot - $gjpTrigger) / max(1, ($gjpMax - $gjpTrigger));
-                $baseOdds = max(2, (int)($baseOdds * (1 - $progress)));
-            }
-            if (random_int(1, $baseOdds) === 1) $isGrandJackpot = true;
-        }
+        $progress = ($currentJackpot - $gjpTrigger) / max(1, ($gjpMax - $gjpTrigger));
+        if ($progress < 0) $progress = 0;
         
-        // Strict Cap Enforcement for GJP
-        if ($isGrandJackpot) {
-            $futureExtracted = $totalExtractedValue + $currentJackpot;
-            $futureRTP = ($futureExtracted / $totalDeposited) * 100;
-            if ($futureRTP > $maxRtpCap) {
-                $isGrandJackpot = false; // Director cancels the Jackpot. Math forbids it.
-            } else {
-                $isHit = true;
-            }
+        $baseOdds = max(500, (int)(15000000 / max(1, $betAmount))); 
+        $adjustedOdds = max(2, (int)($baseOdds * (1 - $progress))); // Odds compress as pool fills
+        
+        if (random_int(1, $adjustedOdds) === 1 || $currentJackpot >= $gjpMax) {
+            // V5.6 LIBERATION: The GJP bypasses the RTP cap entirely. It is a true jackpot.
+            $isGrandJackpot = true; 
+            $isHit = true;
         }
     }
 
-    // --- PHASE 5: PHYSICS SIMULATION & BOARD GENERATION ---
+    // --- PHASE 5: PHYSICS SIMULATION & ISOLATED BOARD GENERATION ---
     $stmtDbRates = $pdo->prepare("SELECT * FROM reel_spawn_rates WHERE island_id = ?");
     $stmtDbRates->execute([$islandId]);
     $dbRates = $stmtDbRates->fetchAll(PDO::FETCH_ASSOC);
 
     $reelSpawnRates = [];
     foreach ($dbRates as $r) {
-        // Physics Slip: Add random -5% to +5% mechanical jitter to the DB rates
         $slip = function($val) { return max(1, $val + random_int(-5, 5)); };
         
         $weights = [
-            1 => $slip((int)$r['sym_1']), 2 => $slip((int)$r['sym_2']), 3 => $slip((int)$r['sym_3']), 
-            4 => $slip((int)$r['sym_4']), 5 => $slip((int)$r['sym_5']), 6 => $slip((int)$r['sym_6']), 7 => $slip((int)$r['sym_7'])
+            1 => 0, // V5.6 ISOLATION: GJP symbol NEVER spawns naturally in the background
+            2 => $slip((int)$r['sym_2']), 3 => $slip((int)$r['sym_3']), 
+            4 => $slip((int)$r['sym_4']), 5 => $slip((int)$r['sym_5']), 
+            6 => $slip((int)$r['sym_6']), 7 => $slip((int)$r['sym_7'])
         ];
         
-        // Director Interference on visual reels
-        if ($directorState === 'GATHER' || $directorState === 'CAP_REJECT') {
-            $weights[1] = 1; // Starve 7s
-            $weights[2] = max(1, (int)($weights[2] * 0.1)); // Starve Chars
-            $weights[6] = (int)($weights[6] * 1.5); // Flood Cherries
+        if ($directorState === 'GATHER' || $directorState === 'CAP_REJECT' || $directorState === 'FREE_BLEED') {
+            $weights[2] = max(1, (int)($weights[2] * 0.1)); // Starve Chars visually
+            $weights[6] = (int)($weights[6] * 2.0); // Flood Cherries visually
         }
         $reelSpawnRates['reel_'.$r['reel_index']] = $weights;
     }
@@ -236,9 +232,9 @@ try {
     // Fallbacks
     if (empty($reelSpawnRates)) {
         $reelSpawnRates = [
-            'reel_1' => [1=>10, 2=>40, 3=>100, 4=>200, 5=>200, 6=>250, 7=>200],
-            'reel_2' => [1=>5,  2=>30, 3=>80,  4=>220, 5=>220, 6=>245, 7=>200],
-            'reel_3' => [1=>2,  2=>20, 3=>60,  4=>250, 5=>250, 6=>218, 7=>200]
+            'reel_1' => [1=>0, 2=>40, 3=>100, 4=>200, 5=>200, 6=>250, 7=>200],
+            'reel_2' => [1=>0, 2=>30, 3=>80,  4=>220, 5=>220, 6=>245, 7=>200],
+            'reel_3' => [1=>0, 2=>20, 3=>60,  4=>250, 5=>250, 6=>218, 7=>200]
         ];
     }
 
@@ -256,6 +252,7 @@ try {
     $isTeaser = false; $isReachEye = false;
 
     if ($isGrandJackpot) {
+        // GJP EXECUTION
         $spinWin += $currentJackpot;
         $baseSeed = (float)($gjpData['base_seed'] ?? 3000000);
         $pdo->prepare("UPDATE global_jackpots SET current_amount = ?, last_won_by = ?, last_won_amount = ?, last_won_at = NOW() WHERE island_id = ?")->execute([$baseSeed, $freshUser['username'], $currentJackpot, $islandId]);
@@ -273,20 +270,16 @@ try {
         $winSym = $rollReel($winSymWeights);
         $proposedWinAmount = $betAmount * ($symMultipliers[$winSym] ?? 0);
         
-        // --- STRICT MULTIPLIER CAP CALCULUS ---
-        // Ensure this specific win doesn't breach the configured max_rtp_cap
+        // STRICT MULTIPLIER CAP CALCULUS (Bypassed if GJP)
         $futureExtracted = $totalExtractedValue + $proposedWinAmount;
         $futureRTP = ($futureExtracted / $totalDeposited) * 100;
         
         if ($futureRTP > $maxRtpCap && !$bonusMode) {
-            // The Director rejects the win because it violates the math ceiling.
-            // Downgrade it to a Cherry (Sym 6) or force a loss.
+            // Downgrade to Cherry
             $winSym = 6; 
             $proposedWinAmount = $betAmount * ($symMultipliers[6] ?? 2.0);
-            
-            // Secondary Check: If even a Cherry breaks the math, force a loss
             if ((($totalExtractedValue + $proposedWinAmount) / $totalDeposited) * 100 > $maxRtpCap) {
-                $isHit = false; 
+                $isHit = false; // Even Cherry breaks math, force loss
             }
         }
 
@@ -304,15 +297,14 @@ try {
     } 
 
     if (!$isHit && !$isGrandJackpot) {
-        // --- LOSS LOGIC & TEASERS ---
+        // --- LOSS LOGIC & PSYCHOLOGICAL TEASERS ---
         $winSym = 0;
         
         $stmtTeaser = $pdo->prepare("SELECT value FROM system_settings WHERE key_name = 'teaser_rate'");
         $stmtTeaser->execute();
         $baseTeaserRate = (int)($stmtTeaser->fetchColumn() ?: 30);
         
-        // Boost teasers if we are gathering/capping to mask the bleeding
-        $teaserChance = ($directorState === 'GATHER' || $directorState === 'CAP_REJECT') ? 60 : $baseTeaserRate; 
+        $teaserChance = ($directorState === 'GATHER' || $directorState === 'CAP_REJECT' || $directorState === 'FREE_BLEED') ? 60 : $baseTeaserRate; 
 
         if (random_int(1, 100) <= $teaserChance) {
             $isTeaser = true;
@@ -323,7 +315,9 @@ try {
             for($i=2; $i<=8; $i+=3) $result[$i] = $rollReel($reelSpawnRates['reel_3']);
             
             $chosenLine = array_rand($paylines);
-            $teaseSym = random_int(2, 4); // Tease high/mid symbols
+            
+            // V5.6 Teasers: We explicitly allow GJP (1) to be teased here, even though it's removed from natural spawns
+            $teaseSym = random_int(1, 3); 
             
             if ($isReachEye) {
                 $result[$paylines[$chosenLine][0]] = $teaseSym;
@@ -346,6 +340,7 @@ try {
             foreach($paylines as $l) {
                 if ($result[$l[0]] == $result[$l[1]] && $result[$l[1]] == $result[$l[2]]) {
                     $result[$l[2]] = ($result[$l[2]] % 7) + 1; 
+                    if ($result[$l[2]] == 1) $result[$l[2]] = 2; // Double check GJP doesn't spawn accidentally
                     $hasWin = true;
                 }
             }
@@ -419,7 +414,7 @@ try {
     
     $pdo->prepare("INSERT INTO game_logs (user_id, machine_id, bet, win, result, xp_earned) VALUES (?, ?, ?, ?, ?, ?)")->execute([$userId, $machineId, $actualBetDeducted, $spinWin, json_encode($result), $xpGain]);
 
-    // Tournaments & Missions Tracking...
+    // Tournaments & Missions Tracking
     $today = date('Y-m-d');
     $pdo->prepare("UPDATE tournament_entries te JOIN tournaments t ON te.tournament_id = t.id SET te.spins_used = te.spins_used + 1, te.current_score = te.current_score + ? WHERE te.user_id = ? AND t.status = 'active' AND t.start_time <= NOW() AND t.end_time > NOW() AND te.spins_used < t.spin_limit")->execute([$spinWin, $userId]);
     $pdo->prepare("INSERT IGNORE INTO user_mission_progress (user_id, mission_id, tracking_date) SELECT ?, id, ? FROM daily_missions WHERE is_active = 1")->execute([$userId, $today]);
@@ -453,7 +448,7 @@ try {
     ]);
 
 } catch (Exception $e) {
-    if ($pdo->inTransaction()) $pdo->rollBack();
+    if (isset($pdo) && $pdo->inTransaction()) $pdo->rollBack();
     http_response_code(400); 
     echo json_encode(['error' => $e->getMessage()]);
 }
