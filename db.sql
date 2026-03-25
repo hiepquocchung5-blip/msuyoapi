@@ -508,3 +508,36 @@ INSERT IGNORE INTO `island_win_rates` (`island_id`, `base_hit_rate`, `max_rtp_ca
     (3, 18.00, 92.00, 2.00), 
     (4, 20.00, 94.00, 1.80), 
     (5, 15.00, 90.00, 3.00);
+
+-- ============================================================================
+-- SUROPARA V6.2 - TRUE VIRTUAL REELS MIGRATION
+-- Replaces abstract weights with precise, ordered physical reel strips.
+-- ============================================================================
+
+-- 1. Drop the old abstract spawn rates
+DROP TABLE IF EXISTS `reel_spawn_rates`;
+
+-- 2. Create the precise reel stops table
+CREATE TABLE `reel_stops` (
+  `island_id`   INT UNSIGNED NOT NULL,
+  `reel_index`  INT NOT NULL,       -- 1, 2, or 3
+  `stop_pos`    INT NOT NULL,       -- 0, 1, 2, 3... (ordered sequence)
+  `symbol_id`   INT NOT NULL,       -- which symbol sits at this stop
+  PRIMARY KEY (`island_id`, `reel_index`, `stop_pos`),
+  CONSTRAINT `fk_stops_island` FOREIGN KEY (`island_id`) REFERENCES `islands` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 3. Seed a basic 30-stop strip for Island 1 (Kyoto Zen)
+-- To create near-misses, notice how Symbol 1 is sandwiched by Symbol 6s.
+INSERT INTO `reel_stops` (`island_id`, `reel_index`, `stop_pos`, `symbol_id`) VALUES
+(1, 1, 0, 6), (1, 1, 1, 4), (1, 1, 2, 2), (1, 1, 3, 6), (1, 1, 4, 5), (1, 1, 5, 3), (1, 1, 6, 6), (1, 1, 7, 7), (1, 1, 8, 6), (1, 1, 9, 4), 
+(1, 1, 10, 2), (1, 1, 11, 6), (1, 1, 12, 5), (1, 1, 13, 3), (1, 1, 14, 6), (1, 1, 15, 7), (1, 1, 16, 6), (1, 1, 17, 2), (1, 1, 18, 4), (1, 1, 19, 6), 
+(1, 1, 20, 5), (1, 1, 21, 7), (1, 1, 22, 6), (1, 1, 23, 3), (1, 1, 24, 1), (1, 1, 25, 6), (1, 1, 26, 4), (1, 1, 27, 5), (1, 1, 28, 6), (1, 1, 29, 7),
+
+(1, 2, 0, 6), (1, 2, 1, 5), (1, 2, 2, 3), (1, 2, 3, 6), (1, 2, 4, 4), (1, 2, 5, 2), (1, 2, 6, 6), (1, 2, 7, 7), (1, 2, 8, 6), (1, 2, 9, 5), 
+(1, 2, 10, 3), (1, 2, 11, 6), (1, 2, 12, 4), (1, 2, 13, 2), (1, 2, 14, 6), (1, 2, 15, 7), (1, 2, 16, 6), (1, 2, 17, 3), (1, 2, 18, 5), (1, 2, 19, 6), 
+(1, 2, 20, 4), (1, 2, 21, 7), (1, 2, 22, 6), (1, 2, 23, 2), (1, 2, 24, 1), (1, 2, 25, 6), (1, 2, 26, 5), (1, 2, 27, 4), (1, 2, 28, 6), (1, 2, 29, 7),
+
+(1, 3, 0, 7), (1, 3, 1, 6), (1, 3, 2, 4), (1, 3, 3, 5), (1, 3, 4, 6), (1, 3, 5, 2), (1, 3, 6, 3), (1, 3, 7, 6), (1, 3, 8, 7), (1, 3, 9, 6), 
+(1, 3, 10, 4), (1, 3, 11, 5), (1, 3, 12, 6), (1, 3, 13, 2), (1, 3, 14, 3), (1, 3, 15, 6), (1, 3, 16, 7), (1, 3, 17, 6), (1, 3, 18, 5), (1, 3, 19, 4), 
+(1, 3, 20, 6), (1, 3, 21, 3), (1, 3, 22, 2), (1, 3, 23, 6), (1, 3, 24, 1), (1, 3, 25, 7), (1, 3, 26, 6), (1, 3, 27, 4), (1, 3, 28, 5), (1, 3, 29, 6);

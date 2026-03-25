@@ -1,16 +1,16 @@
 <?php
 // ============================================================================
-// SUROPARA V6.1 - THE TRANSPARENT ENGINE (PROVABLY FAIR & REAL MECHANICS)
+// SUROPARA V6.2 - THE TRANSPARENT ENGINE (PURE MATHEMATICS)
 // ----------------------------------------------------------------------------
 // FEATURES FULLY INTEGRATED:
-// 1. True Virtual Reels: Constructs physical reel strips in memory based on DB.
-// 2. Cryptographic Stop Selection: SHA-256 hash maps perfectly to strip indexes.
-// 3. Secure Env: Utilizes getEnvSafe() for robust environment variable fetching.
-// 4. Emergent Physics: Teasers, Jackpots, and Wins are 100% mathematically pure.
+// 1. True Virtual Reels: Constructs physical reel strips perfectly from reel_stops.
+// 2. Cryptographic Stop Selection: SHA-256 hash maps cleanly to strip indexes.
+// 3. Emergent Probability: Teasers, Jackpots, and Wins are 100% organic.
+// 4. Secure State: Failsafe PDO injections and zero post-spin manipulation.
 // ============================================================================
 
 $allowedOrigin = "https://suropara.com"; 
-header("Access-Control-Allow-Origin: *"); 
+header("Access-Control-Allow-Origin: $allowedOrigin"); 
 header("Access-Control-Allow-Methods: POST, GET, OPTIONS");
 header("Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With");
 header("Access-Control-Allow-Credentials: true");
@@ -75,67 +75,58 @@ try {
     }
 
     // --- PHASE 3: PROVABLY FAIR RNG GENERATION ---
-    // Secure environment variable fetching using V6.1 standards
     $serverSecret = getEnvSafe('APP_KEY', 'suro_secret_fallback_99x');
     $serverSeed = hash('sha256', $serverSecret . date('Y-m-d'));
     $nonce = $sessionSpins + 1;
     
-    // Generate a cryptographic hash unique to this exact spin event
     $spinHash = hash_hmac('sha256', $machineId . '-' . $nonce, $clientToken . $serverSeed);
     
-    // Extract 9 independent high-precision entropy floats (0.0 to 0.999...) from the hash
+    // Extract highly deterministic entropy floats (0.0 to 0.999...) from the hash
     $entropy = [];
-    for ($i = 0; $i < 9; $i++) {
-        $hexChunk = substr($spinHash, $i * 6, 6);
-        $entropy[$i] = hexdec($hexChunk) / 16777215; // 16777215 is 0xFFFFFF
-    }
-
-    // --- PHASE 4: VIRTUAL REEL CONSTRUCTION & SAMPLING ---
-    // Instead of artificial logic, we build literal virtual reel strips based on DB weights
-    $stmtDbRates = $pdo->prepare("SELECT * FROM reel_spawn_rates WHERE island_id = ? ORDER BY reel_index ASC");
-    $stmtDbRates->execute([$islandId]);
-    $dbRates = $stmtDbRates->fetchAll(PDO::FETCH_ASSOC);
-
-    $virtualReels = [1 => [], 2 => [], 3 => []];
-    
-    if (empty($dbRates)) {
-        // Safe Fallback Matrix if DB is empty
-        $dbRates = [
-            ['reel_index'=>1, 'sym_1'=>1, 'sym_2'=>40, 'sym_3'=>100, 'sym_4'=>200, 'sym_5'=>200, 'sym_6'=>250, 'sym_7'=>200],
-            ['reel_index'=>2, 'sym_1'=>1, 'sym_2'=>30, 'sym_3'=>80,  'sym_4'=>220, 'sym_5'=>220, 'sym_6'=>245, 'sym_7'=>200],
-            ['reel_index'=>3, 'sym_1'=>1, 'sym_2'=>20, 'sym_3'=>60,  'sym_4'=>250, 'sym_5'=>250, 'sym_6'=>218, 'sym_7'=>200]
-        ];
-    }
-
-    // Populate the Virtual Reel Strips
-    foreach ($dbRates as $r) {
-        $idx = $r['reel_index'];
-        for ($symId = 1; $symId <= 7; $symId++) {
-            $weight = (int)$r['sym_' . $symId];
-            for ($w = 0; $w < $weight; $w++) {
-                $virtualReels[$idx][] = $symId;
-            }
-        }
-        // No need to shuffle; picking a random index via entropy creates uniform distribution
-    }
-
-    // Spin the Grid: Map the 9 entropy floats to physical stops on the virtual reels
-    $result = array_fill(0, 9, 0);
     for ($i = 0; $i < 3; $i++) {
-        // Column 1 (Indexes 0, 3, 6) maps to Virtual Reel 1
-        $stopIndex1 = floor($entropy[$i * 3] * count($virtualReels[1]));
-        $result[$i * 3] = $virtualReels[1][$stopIndex1];
-        
-        // Column 2 (Indexes 1, 4, 7) maps to Virtual Reel 2
-        $stopIndex2 = floor($entropy[$i * 3 + 1] * count($virtualReels[2]));
-        $result[$i * 3 + 1] = $virtualReels[2][$stopIndex2];
-        
-        // Column 3 (Indexes 2, 5, 8) maps to Virtual Reel 3
-        $stopIndex3 = floor($entropy[$i * 3 + 2] * count($virtualReels[3]));
-        $result[$i * 3 + 2] = $virtualReels[3][$stopIndex3];
+        $hexChunk = substr($spinHash, $i * 6, 6);
+        $entropy[$i] = hexdec($hexChunk) / 16777215; // 0xFFFFFF
     }
 
-    // --- PHASE 5: LINE EVALUATION & EMERGENT OUTCOMES ---
+    // --- PHASE 4: VIRTUAL REEL STRIP SAMPLING (PURE MATHEMATICS) ---
+    $virtualReels = [1 => [], 2 => [], 3 => []];
+    $stmtStrip = $pdo->prepare("SELECT symbol_id FROM reel_stops WHERE island_id = ? AND reel_index = ? ORDER BY stop_pos ASC");
+    
+    for ($i = 1; $i <= 3; $i++) {
+        $stmtStrip->execute([$islandId, $i]);
+        $strip = $stmtStrip->fetchAll(PDO::FETCH_COLUMN);
+        
+        // Failsafe if DB hasn't been seeded yet (30 stop default strip)
+        if (empty($strip)) {
+            $strip = [6,4,2,6,5,3,6,7,6,4,2,6,5,3,6,7,6,2,4,6,5,7,6,3,1,6,4,5,6,7];
+        }
+        $virtualReels[$i] = $strip;
+    }
+
+    // Cryptographic Index Mapping with Grid Wrap-Around (Top, Mid, Bot)
+    $result = array_fill(0, 9, 0);
+    
+    for ($i = 1; $i <= 3; $i++) {
+        $len = count($virtualReels[$i]);
+        // Map the 0.0-0.999 entropy float to a physical stop on the strip
+        $stopIdx = (int) floor($entropy[$i - 1] * $len);
+        
+        // Wrap around logic for physical reel strips
+        $topIdx = ($stopIdx - 1 < 0) ? $len - 1 : $stopIdx - 1;
+        $botIdx = ($stopIdx + 1 >= $len) ? 0 : $stopIdx + 1;
+        
+        $colOffset = $i - 1;
+        
+        // 3x3 Grid Map: 
+        // [0, 1, 2]
+        // [3, 4, 5]
+        // [6, 7, 8]
+        $result[$colOffset]     = (int)$virtualReels[$i][$topIdx]; 
+        $result[$colOffset + 3] = (int)$virtualReels[$i][$stopIdx];    
+        $result[$colOffset + 6] = (int)$virtualReels[$i][$botIdx];     
+    }
+
+    // --- PHASE 5: PAYOUTS & EMERGENT OBSERVATION ---
     $stmtPayouts = $pdo->prepare("SELECT * FROM island_symbol_payouts WHERE island_id = ?");
     $stmtPayouts->execute([$islandId]);
     $dbPayouts = $stmtPayouts->fetch(PDO::FETCH_ASSOC);
@@ -154,51 +145,45 @@ try {
     $bonusModeTriggered = false;
     $isGrandJackpot = false;
     
-    // Teaser Detection (Emergent from pure math, not forced)
     $isTeaser = false; 
     $isReachEye = false;
 
-    // GJP Progressive Siphon (Always funds the pool regardless of win/loss)
+    // GJP Progressive Siphon (Organic funding)
     $stmtJp = $pdo->prepare("SELECT current_amount, base_seed FROM global_jackpots WHERE island_id = ? FOR UPDATE");
     $stmtJp->execute([$islandId]);
     $gjpData = $stmtJp->fetch();
     $currentJackpot = (float)($gjpData['current_amount'] ?? 3000000);
 
     if ($actualBetDeducted > 0) {
-        $currentJackpot += ($actualBetDeducted * 0.015); // Standard 1.5% Contribution
+        $currentJackpot += ($actualBetDeducted * 0.015);
         $pdo->prepare("UPDATE global_jackpots SET current_amount = ? WHERE island_id = ?")->execute([$currentJackpot, $islandId]);
     }
 
-    // Evaluate the board cryptographically
+    // Natural Line Evaluation (No forced wins, no rejected wins)
     foreach ($paylines as $idx => $line) {
         $s1 = $result[$line[0]];
         $s2 = $result[$line[1]];
         $s3 = $result[$line[2]];
 
         if ($s1 === $s2 && $s2 === $s3) {
-            // WE HAVE A NATURAL WIN
             $winningLines[] = $idx;
             
             if ($s1 === 1) {
-                // NATURAL GRAND JACKPOT TRIGGER (1-1-1)
+                // Natural GJP Trigger!
                 $isGrandJackpot = true;
             } elseif ($s1 === 7) {
-                // REPLAY / FREE SPIN
                 $freeSpinsEarned++;
             } elseif ($s1 === 3 && !$bonusMode) {
-                // BAR / BONUS RUSH TRIGGER
                 $bonusModeTriggered = true;
                 $spinWin += $betAmount * $symMultipliers[$s1];
             } else {
-                // STANDARD MULTIPLIER WIN
                 $spinWin += $betAmount * $symMultipliers[$s1];
             }
         } 
         else {
-            // DETECT EMERGENT TEASER (A-A-B pattern on premium symbols: 1, 2, or 3)
+            // Observe Emergent Teasers (A-A-B pattern on premium symbols)
             if ($s1 === $s2 && in_array($s1, [1, 2, 3])) {
                 $isTeaser = true;
-                // If the teaser is on the diagonal or bottom line involving the 3rd column, trigger high suspense
                 if ($line[2] === 2 || $line[2] === 5 || $line[2] === 8) {
                     $isReachEye = true; 
                 }
@@ -206,7 +191,7 @@ try {
         }
     }
 
-    // --- PHASE 6: PAYOUT EXECUTION ---
+    // --- PHASE 6: EXECUTION & LOGGING ---
     if ($isGrandJackpot) {
         $spinWin += $currentJackpot;
         $baseSeed = (float)($gjpData['base_seed'] ?? 3000000);
@@ -214,7 +199,6 @@ try {
         $pdo->prepare("INSERT INTO chat_messages (type, message, is_pinned) VALUES ('jackpot', ?, 1)")->execute(["🚨 ASTRONOMICAL! {$freshUser['username']} defied probability and hit the GRAND JACKPOT for " . number_format($currentJackpot) . " MMK! 🚨"]);
     }
 
-    // Apply Global Marketing Multiplier if active
     if ($spinWin > 0 && !$isGrandJackpot) {
         $stmtEvent = $pdo->prepare("SELECT multiplier FROM marketing_events WHERE is_active = 1 AND start_time <= NOW() AND end_time > NOW() LIMIT 1");
         $stmtEvent->execute();
@@ -222,7 +206,6 @@ try {
         $spinWin = $spinWin * $eventMult;
     }
 
-    // State Transitions
     $newFreeSpins = $freeSpins > 0 ? $freeSpins - 1 + $freeSpinsEarned : $freeSpinsEarned;
     if ($bonusSpinsLeft > 0) {
         $bonusSpinsLeft--;
@@ -242,7 +225,6 @@ try {
         else $winTier = 'SMALL';
     }
 
-    // --- PHASE 7: BALANCES & LOGGING ---
     $vaultSiphon = ($spinWin >= ($betAmount * 50)) ? $spinWin * 0.05 : 0;
     $spinWin -= $vaultSiphon; 
     
@@ -268,14 +250,17 @@ try {
     $pdo->prepare("UPDATE machines SET total_laps = total_laps + 1, total_payout = total_payout + ?, session_token = ?, free_spins = ?, bonus_mode = ?, bonus_spins_left = ?, laps_since_bonus = ?, session_spins = ?, session_win_streak = ?, last_played_at = NOW() WHERE id = ?")
         ->execute([($spinWin + $vaultSiphon), $clientToken, $newFreeSpins, $bonusMode, $bonusSpinsLeft, $lapsSinceBonus, $sessionSpins, $sessionWinStreak, $machineId]);
     
-    // Store Provably Fair hash and Virtual Reel mapping in game logs
     $pdo->prepare("INSERT INTO game_logs (user_id, machine_id, bet, win, result, xp_earned) VALUES (?, ?, ?, ?, ?, ?)")
         ->execute([$userId, $machineId, $actualBetDeducted, $spinWin, json_encode(['board' => $result, 'pf_hash' => $spinHash]), $xpGain]);
 
     $pdo->commit();
-    $finalBal = $pdo->query("SELECT balance FROM users WHERE id = $userId")->fetchColumn();
+    
+    // V6.2 SECURITY PATCH: Parameterized statement replacing direct string interpolation
+    $stmtBal = $pdo->prepare("SELECT balance FROM users WHERE id = ?");
+    $stmtBal->execute([$userId]);
+    $finalBal = $stmtBal->fetchColumn();
 
-    // --- PHASE 8: DATA PAYLOAD ---
+    // --- PHASE 7: DATA PAYLOAD ---
     echo json_encode([
         'status' => 'success', 
         'stops' => $result, 
@@ -294,7 +279,7 @@ try {
         'is_teaser' => $isTeaser, 
         'is_reach_eye' => $isReachEye, 
         'is_jackpot' => $isGrandJackpot,
-        'provably_fair_hash' => $spinHash // Expose hash to client for transparency
+        'provably_fair_hash' => $spinHash
     ]);
 
 } catch (Exception $e) {
