@@ -1,6 +1,6 @@
 <?php
 // ============================================================================
-// SUROPARA V6.8.1 - THE VERIFIABLE ENGINE (TIMEZONE & CONCURRENCY PATCHED)
+// SUROPARA V6.8.2 - THE VERIFIABLE ENGINE (CORS 200 OK PATCH)
 // ----------------------------------------------------------------------------
 // FEATURES FULLY INTEGRATED:
 // 1. Strict Origin Validation: parse_url() blocks spoofed CORS domains.
@@ -8,12 +8,12 @@
 // 3. Jackpot Noise: Prevents advantage play via 20% RNG trigger distortion.
 // 4. In-Memory Rate Limiting: Bypasses DB timezone bugs for endless spinning.
 // 5. True Atomic Financials: Strict SQL-level increment/decrement.
-// 6. State Auto-Healing: Repairs missing cryptographic hashes instantly.
+// 6. Pre-flight Stability: OPTIONS requests return 200 OK instead of 204.
 // ============================================================================
 
 // --- STRICT CORS & PRE-FLIGHT HANDLING ---
 $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
-$allowedHosts = ['suropara.com'];
+$allowedHosts = ['suropara.com', 'm.suropara.com', 'localhost'];
 $parsedHost = parse_url($origin, PHP_URL_HOST);
 
 if ($parsedHost && in_array($parsedHost, $allowedHosts)) {
@@ -27,8 +27,9 @@ header("Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-W
 header("Access-Control-Allow-Credentials: true");
 header("Content-Type: application/json; charset=UTF-8");
 
+// V6.8.2 Patch: Replaced 204 with 200 for broader proxy/webview compatibility
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') { 
-    http_response_code(204); 
+    http_response_code(200); 
     exit; 
 }
 
@@ -155,14 +156,13 @@ try {
             ->execute([$actualBetDeducted, $actualBetDeducted, $userId]);
     }
 
-    // --- PHASE 4: DETERMINISTIC PROVABLY FAIR CHAIN (V6.8.1) ---
+    // --- PHASE 4: DETERMINISTIC PROVABLY FAIR CHAIN (V6.8.2) ---
     $serverSeed = $machine['server_seed'];
     $previousSeed = $machine['previous_server_seed'];
     $revealedSeed = null;
 
-    // V6.8.1 Failsafe: Triggers rotation if server_seed_hash was missing due to SQL skips
     if (!$serverSeed || empty($machine['server_seed_hash']) || ($sessionSpins > 0 && $sessionSpins % 50 === 0)) {
-        $revealedSeed = $serverSeed; // Expose old seed to client for verification
+        $revealedSeed = $serverSeed; 
         $previousSeed = $serverSeed;
         $serverSeed = bin2hex(random_bytes(32));
         $serverSeedHash = hash('sha256', $serverSeed);
