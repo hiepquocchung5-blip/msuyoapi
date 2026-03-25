@@ -541,3 +541,23 @@ INSERT INTO `reel_stops` (`island_id`, `reel_index`, `stop_pos`, `symbol_id`) VA
 (1, 3, 0, 7), (1, 3, 1, 6), (1, 3, 2, 4), (1, 3, 3, 5), (1, 3, 4, 6), (1, 3, 5, 2), (1, 3, 6, 3), (1, 3, 7, 6), (1, 3, 8, 7), (1, 3, 9, 6), 
 (1, 3, 10, 4), (1, 3, 11, 5), (1, 3, 12, 6), (1, 3, 13, 2), (1, 3, 14, 3), (1, 3, 15, 6), (1, 3, 16, 7), (1, 3, 17, 6), (1, 3, 18, 5), (1, 3, 19, 4), 
 (1, 3, 20, 6), (1, 3, 21, 3), (1, 3, 22, 2), (1, 3, 23, 6), (1, 3, 24, 1), (1, 3, 25, 7), (1, 3, 26, 6), (1, 3, 27, 4), (1, 3, 28, 5), (1, 3, 29, 6);
+
+-- ============================================================================
+-- SUROPARA V6.7 - PROVABLY FAIR & TELEMETRY MIGRATION
+-- Run this script in your database manager to upgrade the schema.
+-- ============================================================================
+
+-- 1. Enhance Machines table for Provably Fair Chaining
+ALTER TABLE `machines` 
+ADD COLUMN IF NOT EXISTS `server_seed_hash` VARCHAR(64) NULL DEFAULT NULL,
+ADD COLUMN IF NOT EXISTS `previous_server_seed` VARCHAR(64) NULL DEFAULT NULL;
+
+-- 2. Enhance Game Logs for RTP Observability & Telemetry
+ALTER TABLE `game_logs`
+ADD COLUMN IF NOT EXISTS `rtp_in` DECIMAL(12,2) DEFAULT 0.00 AFTER `win`,
+ADD COLUMN IF NOT EXISTS `rtp_out` DECIMAL(12,2) DEFAULT 0.00 AFTER `rtp_in`,
+ADD COLUMN IF NOT EXISTS `entropy_cache` JSON NULL AFTER `result`,
+ADD COLUMN IF NOT EXISTS `reel_indices` JSON NULL AFTER `entropy_cache`;
+
+-- 3. Ensure indexes exist for high-performance telemetry querying
+CREATE INDEX IF NOT EXISTS `idx_game_logs_rtp` ON `game_logs` (`created_at`, `rtp_in`, `rtp_out`);
