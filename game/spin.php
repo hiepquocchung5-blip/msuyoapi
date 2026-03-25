@@ -1,14 +1,14 @@
 <?php
 // ============================================================================
-// SUROPARA V6.8.2 - THE VERIFIABLE ENGINE (CORS 200 OK PATCH)
+// SUROPARA V6.8.3 - THE VERIFIABLE ENGINE (AUTO-HEALING & SESSION PATCH)
 // ----------------------------------------------------------------------------
 // FEATURES FULLY INTEGRATED:
 // 1. Strict Origin Validation: parse_url() blocks spoofed CORS domains.
 // 2. Deterministic Entropy: Sequential chunk hashing removes locality bias.
 // 3. Jackpot Noise: Prevents advantage play via 20% RNG trigger distortion.
-// 4. In-Memory Rate Limiting: Bypasses DB timezone bugs for endless spinning.
+// 4. In-Memory Rate Limiting: Unlocked session files for endless spinning.
 // 5. True Atomic Financials: Strict SQL-level increment/decrement.
-// 6. Pre-flight Stability: OPTIONS requests return 200 OK instead of 204.
+// 6. Auto-Healing: Graceful fallbacks for missing SQL telemetry columns.
 // ============================================================================
 
 // --- STRICT CORS & PRE-FLIGHT HANDLING ---
@@ -88,6 +88,7 @@ if (isset($_SESSION['last_spin_time']) && ($currentTime - $_SESSION['last_spin_t
     exit;
 }
 $_SESSION['last_spin_time'] = $currentTime;
+session_write_close(); // V6.8.3 PATCH: Unlock session file to prevent deadlocks on consecutive spins!
 
 try {
     // --- PHASE 2: PRE-TRANSACTION CACHE READS (REDUCES DEADLOCKS) ---
@@ -188,9 +189,14 @@ try {
     }
 
     // --- PHASE 5: DECOUPLED JACKPOT ENGINE (PREDICTABILITY FIX) ---
-    $stmtJp = $pdo->prepare("SELECT current_amount, base_seed, trigger_amount, max_amount FROM global_jackpots WHERE island_id = ? FOR UPDATE");
-    $stmtJp->execute([$islandId]);
-    $gjpData = $stmtJp->fetch();
+    try {
+        $stmtJp = $pdo->prepare("SELECT current_amount, base_seed, trigger_amount, max_amount FROM global_jackpots WHERE island_id = ? FOR UPDATE");
+        $stmtJp->execute([$islandId]);
+        $gjpData = $stmtJp->fetch();
+    } catch (Exception $e) {
+        // Fallback if global_jackpots schema is outdated
+        $gjpData = ['current_amount' => 3000000, 'base_seed' => 3000000, 'trigger_amount' => 3600000, 'max_amount' => 7200000];
+    }
     
     $currentJackpot = (float)($gjpData['current_amount'] ?? 3000000);
     $gjpMax = (float)($gjpData['max_amount'] ?? 7200000);
@@ -292,9 +298,13 @@ try {
     // Apply Global Marketing Multiplier
     if ($spinWin > 0 && !$isGrandJackpot) {
         $eventMult = SystemCache::get("marketing_mult:global", function() use ($pdo) {
-            $stmtEvent = $pdo->prepare("SELECT multiplier FROM marketing_events WHERE is_active = 1 AND start_time <= NOW() AND end_time > NOW() LIMIT 1");
-            $stmtEvent->execute();
-            return $stmtEvent->fetchColumn() ?: 1.0;
+            try {
+                $stmtEvent = $pdo->prepare("SELECT multiplier FROM marketing_events WHERE is_active = 1 AND start_time <= NOW() AND end_time > NOW() LIMIT 1");
+                $stmtEvent->execute();
+                return $stmtEvent->fetchColumn() ?: 1.0;
+            } catch (Exception $e) {
+                return 1.0; // Graceful fallback
+            }
         });
         $spinWin = $spinWin * $eventMult;
     }
@@ -389,8 +399,15 @@ try {
         ]
     ];
     
-    $pdo->prepare("INSERT INTO game_logs (user_id, machine_id, bet, win, rtp_in, rtp_out, result, entropy_cache, reel_indices, xp_earned) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        ->execute([$userId, $machineId, $actualBetDeducted, $spinWin, $actualBetDeducted, ($spinWin + $vaultSiphon), json_encode($logPayload), json_encode($entropy), json_encode($selectedIndices), $xpGain]);
+    try {
+        // Try inserting with new telemetry columns
+        $pdo->prepare("INSERT INTO game_logs (user_id, machine_id, bet, win, rtp_in, rtp_out, result, entropy_cache, reel_indices, xp_earned) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+            ->execute([$userId, $machineId, $actualBetDeducted, $spinWin, $actualBetDeducted, ($spinWin + $vaultSiphon), json_encode($logPayload), json_encode($entropy), json_encode($selectedIndices), $xpGain]);
+    } catch (Exception $e) {
+        // V6.8.3 Fallback: If telemetry columns are missing from the DB, insert using legacy structure
+        $pdo->prepare("INSERT INTO game_logs (user_id, machine_id, bet, win, result, xp_earned) VALUES (?, ?, ?, ?, ?, ?)")
+            ->execute([$userId, $machineId, $actualBetDeducted, $spinWin, json_encode($logPayload), $xpGain]);
+    }
 
     $pdo->commit();
 
