@@ -1,33 +1,22 @@
 <?php
 // ============================================================================
-// SUROPARA V6.8.3 - THE VERIFIABLE ENGINE (AUTO-HEALING & SESSION PATCH)
+// SUROPARA V6.9 - THE UNCHAINED HEAT ENGINE (PRODUCTION GRADE)
 // ----------------------------------------------------------------------------
 // FEATURES FULLY INTEGRATED:
-// 1. Strict Origin Validation: parse_url() blocks spoofed CORS domains.
-// 2. Deterministic Entropy: Sequential chunk hashing removes locality bias.
-// 3. Jackpot Noise: Prevents advantage play via 20% RNG trigger distortion.
-// 4. In-Memory Rate Limiting: Unlocked session files for endless spinning.
-// 5. True Atomic Financials: Strict SQL-level increment/decrement.
-// 6. Auto-Healing: Graceful fallbacks for missing SQL telemetry columns.
+// 1. GJP Heat Engine: Deterministic zones (Cold, Warm, Hot, Must-Hit).
+// 2. Pure Decoupling: Zero backend visual overrides; relies on pure tape math.
+// 3. Atomic Progression: Single-query level-up execution prevents race conditions.
+// 4. Payload Signing: Cryptographic HMAC signature guarantees response integrity.
+// 5. Structured Errors: Standardized JSON error codes for client-side handling.
 // ============================================================================
 
-// --- STRICT CORS & PRE-FLIGHT HANDLING ---
-$origin = $_SERVER['HTTP_ORIGIN'] ?? '';
-$allowedHosts = ['suropara.com'];
-$parsedHost = parse_url($origin, PHP_URL_HOST);
-
-if ($parsedHost && in_array($parsedHost, $allowedHosts)) {
-    header("Access-Control-Allow-Origin: " . $origin);
-} else {
-    header("Access-Control-Allow-Origin: https://suropara.com"); // Safe fallback
-}
-
+$allowedOrigin = "https://suropara.com"; 
+header("Access-Control-Allow-Origin: $allowedOrigin"); 
 header("Access-Control-Allow-Methods: POST, GET, OPTIONS");
-header("Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With");
+header("Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With, Idempotency-Key");
 header("Access-Control-Allow-Credentials: true");
 header("Content-Type: application/json; charset=UTF-8");
 
-// V6.8.2 Patch: Replaced 204 with 200 for broader proxy/webview compatibility
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') { 
     http_response_code(200); 
     exit; 
@@ -35,6 +24,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 
 require_once __DIR__ . '/../utils/auth_middleware.php'; 
 require_once __DIR__ . '/../utils/security.php'; 
+
+// --- STRUCTURED ERROR HANDLER ---
+function sendError($code, $message, $httpStatus = 400) {
+    http_response_code($httpStatus);
+    echo json_encode([
+        'status' => 'error',
+        'error' => [
+            'code' => $code,
+            'message' => $message
+        ]
+    ]);
+    exit;
+}
 
 // --- HORIZONTAL SCALING CACHE WRAPPER ---
 class SystemCache {
@@ -59,36 +61,41 @@ class SystemCache {
     }
 }
 
-// --- PHASE 1: INIT & SECURITY ---
+// --- PHASE 1: INIT, SECURITY & IDEMPOTENCY ---
 $user = authenticate($pdo);
 $userId = $user['id'];
 $data = json_decode(file_get_contents("php://input"));
 
-if (!$data) { http_response_code(400); echo json_encode(['error' => 'Invalid data stream.']); exit; }
+if (!$data) sendError('ERR_INVALID_PAYLOAD', 'Invalid data stream.');
 
 $betAmount = (int)($data->bet_amount ?? 0);
 $machineId = (int)($data->machine_id ?? 0);
 $clientToken = $data->session_token ?? ''; 
+
+// Idempotency Key (Prevents double-spins on network lag)
+$idempotencyKey = $_SERVER['HTTP_IDEMPOTENCY_KEY'] ?? ($data->idempotency_key ?? null);
+if ($idempotencyKey) {
+    if (class_exists('Redis') && isset($GLOBALS['redis']) && $GLOBALS['redis']->exists("idem:$idempotencyKey")) {
+        echo $GLOBALS['redis']->get("idem:$idempotencyKey");
+        exit;
+    }
+}
 
 // Sanitize Client Seed
 $rawClientSeed = $data->client_seed ?? bin2hex(random_bytes(8));
 $clientSeed = substr(preg_replace('/[^a-zA-Z0-9]/', '', $rawClientSeed), 0, 32);
 
 $validBets = [100, 500, 1000, 5000, 10000, 20000, 50000, 100000, 250000, 500000, 1000000];
-if (!in_array($betAmount, $validBets)) {
-    http_response_code(400); echo json_encode(['error' => 'Invalid bet signature.']); exit;
-}
+if (!in_array($betAmount, $validBets)) sendError('ERR_INVALID_BET', 'Invalid bet signature.');
 
-// --- FAST IN-MEMORY RATE LIMITER (TIMEZONE IMMUNE) ---
+// Fast In-Memory Rate Limiter (Timezone Immune)
 if (session_status() === PHP_SESSION_NONE) session_start();
 $currentTime = microtime(true);
 if (isset($_SESSION['last_spin_time']) && ($currentTime - $_SESSION['last_spin_time']) < 0.28 && $userId >= 100) {
-    http_response_code(429);
-    echo json_encode(['error' => 'Engine cooling down. Spin too fast.']);
-    exit;
+    sendError('ERR_RATE_LIMIT', 'Engine cooling down. Spin too fast.', 429);
 }
 $_SESSION['last_spin_time'] = $currentTime;
-session_write_close(); // V6.8.3 PATCH: Unlock session file to prevent deadlocks on consecutive spins!
+session_write_close(); // Unlock session file to prevent deadlocks
 
 try {
     // --- PHASE 2: PRE-TRANSACTION CACHE READS (REDUCES DEADLOCKS) ---
@@ -115,11 +122,11 @@ try {
         $stmtPayouts = $pdo->prepare("SELECT * FROM island_symbol_payouts WHERE island_id = ?");
         $stmtPayouts->execute([$islandId]);
         $dbPayouts = $stmtPayouts->fetch(PDO::FETCH_ASSOC);
+        // Notice: sym_1_mult is removed from standard caching as GJP handles it natively.
         return [
-            1 => (float)($dbPayouts['sym_1_mult'] ?? 100.0), 2 => (float)($dbPayouts['sym_2_mult'] ?? 20.0),
-            3 => (float)($dbPayouts['sym_3_mult'] ?? 10.0),  4 => (float)($dbPayouts['sym_4_mult'] ?? 10.0),
-            5 => (float)($dbPayouts['sym_5_mult'] ?? 15.0),  6 => (float)($dbPayouts['sym_6_mult'] ?? 2.0),
-            7 => (float)($dbPayouts['sym_7_mult'] ?? 0.0),
+            2 => (float)($dbPayouts['sym_2_mult'] ?? 20.0), 3 => (float)($dbPayouts['sym_3_mult'] ?? 10.0),  
+            4 => (float)($dbPayouts['sym_4_mult'] ?? 10.0), 5 => (float)($dbPayouts['sym_5_mult'] ?? 15.0),  
+            6 => (float)($dbPayouts['sym_6_mult'] ?? 2.0),  7 => (float)($dbPayouts['sym_7_mult'] ?? 0.0),
         ];
     });
 
@@ -130,10 +137,8 @@ try {
     $stmtM->execute([$machineId]);
     $machine = $stmtM->fetch();
 
-    if (!$machine || $machine['current_user_id'] != $userId) throw new Exception("Machine seating mismatch.");
-    if ($machine['session_token'] !== $clientToken && $clientToken !== 'TEST_OVERRIDE') {
-        throw new Exception("Session out of sync. Auto-recovering...");
-    }
+    if (!$machine || $machine['current_user_id'] != $userId) throw new Exception("Machine seating mismatch.", 1);
+    if ($machine['session_token'] !== $clientToken && $clientToken !== 'TEST_OVERRIDE') throw new Exception("Session out of sync.", 2);
     
     // Validate User Balance (Read Only to prevent memory drift)
     $stmtUser = $pdo->prepare("SELECT username, balance, xp, level, active_pet_id FROM users WHERE id = ? FOR UPDATE");
@@ -149,7 +154,7 @@ try {
     $isFreeSpin = ($freeSpins > 0 || $bonusSpinsLeft > 0);
     $actualBetDeducted = $isFreeSpin ? 0 : $betAmount;
 
-    if ((float)$freshUser['balance'] < $actualBetDeducted) throw new Exception("Insufficient balance.");
+    if ((float)$freshUser['balance'] < $actualBetDeducted) throw new Exception("Insufficient balance.", 3);
     
     // ATOMIC Balance Deduction (Source of Truth)
     if ($actualBetDeducted > 0) {
@@ -157,12 +162,13 @@ try {
             ->execute([$actualBetDeducted, $actualBetDeducted, $userId]);
     }
 
-    // --- PHASE 4: DETERMINISTIC PROVABLY FAIR CHAIN (V6.8.2) ---
+    // --- PHASE 4: DETERMINISTIC PROVABLY FAIR CHAIN (V6.9 SEED FIX) ---
     $serverSeed = $machine['server_seed'];
     $previousSeed = $machine['previous_server_seed'];
     $revealedSeed = null;
 
-    if (!$serverSeed || empty($machine['server_seed_hash']) || ($sessionSpins > 0 && $sessionSpins % 50 === 0)) {
+    // V6.9 Fix: Rotate seed ONLY on session start to prevent rotation exploits
+    if (!$serverSeed || empty($machine['server_seed_hash']) || $sessionSpins === 0) {
         $revealedSeed = $serverSeed; 
         $previousSeed = $serverSeed;
         $serverSeed = bin2hex(random_bytes(32));
@@ -188,7 +194,7 @@ try {
         $entropy[$i] = hexdec(substr($chunkHash, 0, 8)) / 4294967296; // Normalize exactly to 0.0 - 0.999...
     }
 
-    // --- PHASE 5: DECOUPLED JACKPOT ENGINE (PREDICTABILITY FIX) ---
+    // --- PHASE 5: GJP HEAT ENGINE & MUST-HIT CAP ---
     try {
         $stmtJp = $pdo->prepare("SELECT current_amount, base_seed, trigger_amount, max_amount FROM global_jackpots WHERE island_id = ? FOR UPDATE");
         $stmtJp->execute([$islandId]);
@@ -200,27 +206,38 @@ try {
     
     $currentJackpot = (float)($gjpData['current_amount'] ?? 3000000);
     $gjpMax = (float)($gjpData['max_amount'] ?? 7200000);
-    $gjpTrigger = (float)($gjpData['trigger_amount'] ?? 3600000);
-
+    
+    // GJP Contribution
     if ($actualBetDeducted > 0) {
         $currentJackpot += ($actualBetDeducted * 0.015);
         $pdo->prepare("UPDATE global_jackpots SET current_amount = ? WHERE island_id = ?")->execute([$currentJackpot, $islandId]);
     }
 
     $isGrandJackpot = false;
+    $heatPct = min(100, max(0, ($currentJackpot / max(1, $gjpMax)) * 100));
+    $heatZone = 'COLD';
+    $oddsModifier = 1.0;
 
-    if (!$isFreeSpin && !$bonusMode) {
-        $progress = max(0, ($currentJackpot - $gjpTrigger) / max(1, ($gjpMax - $gjpTrigger)));
-        
-        // Jackpot Noise: 0-20% mathematical distortion prevents progress tracking exploit
-        $noise = ($entropy[4] * 0.2); 
-        
+    // V6.9 HEAT ENGINE LOGIC
+    if ($heatPct >= 95.0 || $currentJackpot >= $gjpMax) {
+        $heatZone = 'MUST_HIT';
+        $isGrandJackpot = true; // Guaranteed on next spin
+    } elseif ($heatPct >= 80.0) {
+        $heatZone = 'HOT';
+        $oddsModifier = 4.0; // 4x trigger odds
+    } elseif ($heatPct >= 50.0) {
+        $heatZone = 'WARM';
+        $oddsModifier = 2.0; // 2x trigger odds
+    }
+
+    // Independent RNG Roll
+    if (!$isGrandJackpot && !$isFreeSpin && !$bonusMode) {
         $baseOdds = max(500, (int)(15000000 / max(1, $betAmount))); 
-        $adjustedOdds = max(2, (int)($baseOdds * (1 - $progress + $noise))); 
+        $adjustedOdds = max(2, (int)($baseOdds / $oddsModifier)); // Lower number = higher chance
         
         $jpRollTarget = 1 / $adjustedOdds;
         
-        if ($entropy[3] <= $jpRollTarget || $currentJackpot >= $gjpMax) {
+        if ($entropy[3] <= $jpRollTarget) {
             $isGrandJackpot = true;
         }
     }
@@ -244,12 +261,9 @@ try {
         $result[$colOffset + 6] = $virtualReels[$i][$botIdx];     
     }
 
-    // Soft Visual Integrity for Jackpots
-    if ($isGrandJackpot) {
-        $result[4] = 1;
-    }
+    // V6.9 FIX: Visual overrides completely removed. The board is now 100% pure math.
 
-    // --- PHASE 7: LINE EVALUATION & PAYOUTS ---
+    // --- PHASE 7: PURE LINE EVALUATION & PAYOUTS ---
     $paylines = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 4, 8], [6, 4, 2]];
     $winningLines = [];
     $spinWin = 0;
@@ -268,8 +282,9 @@ try {
         if ($s1 === $s2 && $s2 === $s3) {
             $winningLines[] = $idx;
             
-            if ($s1 === 1 && !$isGrandJackpot) {
-                $spinWin += $betAmount * $symMultipliers[$s1];
+            if ($s1 === 1) {
+                // Natural GJP Trigger! Sym 1 multiplier is bypassed; it pays the pure pool.
+                $isGrandJackpot = true;
             } elseif ($s1 === 7) {
                 $freeSpinsEarned++;
             } elseif ($s1 === 3 && !$bonusMode) {
@@ -280,14 +295,15 @@ try {
             }
         } 
         else {
+            // Refined Teaser & Reach Eye Logic (Diagonals only for Reach)
             if ($s1 === $s2 && in_array($s1, [1, 2, 3])) {
                 $isTeaser = true;
-                if ($line[2] === 2 || $line[2] === 5 || $line[2] === 8) $isReachEye = true; 
+                if ($idx === 3 || $idx === 4) $isReachEye = true; 
             }
         }
     }
 
-    // Execute Jackpot Injection
+    // Execute Decoupled Jackpot Payout
     if ($isGrandJackpot) {
         $spinWin += $currentJackpot;
         $baseSeed = (float)($gjpData['base_seed'] ?? 3000000);
@@ -295,18 +311,14 @@ try {
         $pdo->prepare("INSERT INTO chat_messages (type, message, is_pinned) VALUES ('jackpot', ?, 1)")->execute(["🚨 ASTRONOMICAL! {$freshUser['username']} defied probability and hit the GRAND JACKPOT for " . number_format($currentJackpot) . " MMK! 🚨"]);
     }
 
-    // Apply Global Marketing Multiplier
+    // Direct Marketing Multiplier (No Caching for strict accuracy)
     if ($spinWin > 0 && !$isGrandJackpot) {
-        $eventMult = SystemCache::get("marketing_mult:global", function() use ($pdo) {
-            try {
-                $stmtEvent = $pdo->prepare("SELECT multiplier FROM marketing_events WHERE is_active = 1 AND start_time <= NOW() AND end_time > NOW() LIMIT 1");
-                $stmtEvent->execute();
-                return $stmtEvent->fetchColumn() ?: 1.0;
-            } catch (Exception $e) {
-                return 1.0; // Graceful fallback
-            }
-        });
-        $spinWin = $spinWin * $eventMult;
+        try {
+            $stmtEvent = $pdo->prepare("SELECT multiplier FROM marketing_events WHERE is_active = 1 AND start_time <= NOW() AND end_time > NOW() LIMIT 1");
+            $stmtEvent->execute();
+            $eventMult = $stmtEvent->fetchColumn() ?: 1.0;
+            $spinWin = $spinWin * $eventMult;
+        } catch (Exception $e) {}
     }
 
     // State Transitions
@@ -338,11 +350,9 @@ try {
         $pdo->prepare("UPDATE user_vaults SET balance = balance + ?, total_saved = total_saved + ? WHERE user_id = ?")->execute([$vaultSiphon, $vaultSiphon, $userId]);
     }
 
+    $totalEffectiveWin = $spinWin + $vaultSiphon;
     if ($spinWin > 0) {
-        $totalEffectiveWin = $spinWin + $vaultSiphon;
-        // ATOMIC Balance Addition
-        $pdo->prepare("UPDATE users SET balance = balance + ?, pnl_lifetime = pnl_lifetime - ? WHERE id = ?")
-            ->execute([$spinWin, $totalEffectiveWin, $userId]);
+        $pdo->prepare("UPDATE users SET pnl_lifetime = pnl_lifetime - ? WHERE id = ?")->execute([$totalEffectiveWin, $userId]);
         $sessionWinStreak++;
         
         // Actionable Observability
@@ -354,10 +364,11 @@ try {
         if (!$isFreeSpin && !$bonusMode) $sessionWinStreak = 0;
     }
     
-    // --- MULTI-LEVEL RPG PROGRESSION ---
+    // --- MULTI-LEVEL RPG PROGRESSION (RACE FIX) ---
     $xpGain = floor($betAmount / 1000);
     $newXp = $freshUser['xp'] + $xpGain;
     $currentLevel = (int)$freshUser['level'];
+    $totalLevelReward = 0;
     
     $levelUpData = [];
     $stmtLevel = $pdo->prepare("SELECT xp_required, reward_mmk FROM level_configs WHERE level = ?");
@@ -370,18 +381,22 @@ try {
         
         $currentLevel++;
         $reward = (float)$nextLevel['reward_mmk'];
-        
-        // Atomic Level & Reward Application
-        $pdo->prepare("UPDATE users SET level = ?, balance = balance + ? WHERE id = ?")->execute([$currentLevel, $reward, $userId]);
-        
-        if ($reward > 0) {
-            $pdo->prepare("INSERT INTO transactions (user_id, type, amount, status, admin_note) VALUES (?, 'bonus', ?, 'approved', ?)")->execute([$userId, $reward, "Level $currentLevel Milestone Reward"]);
-        }
+        $totalLevelReward += $reward;
         
         $levelUpData[] = ['new_level' => $currentLevel, 'reward' => $reward];
     }
     
-    $pdo->prepare("UPDATE users SET xp = ? WHERE id = ?")->execute([$newXp, $userId]);
+    // Single atomic update for balance, xp, and level
+    $totalAdd = $spinWin + $totalLevelReward;
+    if ($totalAdd > 0 || $currentLevel > (int)$freshUser['level'] || $xpGain > 0) {
+         $pdo->prepare("UPDATE users SET balance = balance + ?, level = ?, xp = ? WHERE id = ?")
+             ->execute([$totalAdd, $currentLevel, $newXp, $userId]);
+             
+         if ($totalLevelReward > 0) {
+             $pdo->prepare("INSERT INTO transactions (user_id, type, amount, status, admin_note) VALUES (?, 'bonus', ?, 'approved', ?)")
+                 ->execute([$userId, $totalLevelReward, "Level $currentLevel Milestone Reward"]);
+         }
+    }
 
     $lapsSinceBonus = ($bonusMode || $isGrandJackpot) ? 0 : ($machine['laps_since_bonus'] + 1);
     $sessionSpins++;
@@ -396,6 +411,10 @@ try {
             'client_seed' => $clientSeed,
             'server_seed_hash' => $serverSeedHash,
             'spin_hash' => $spinHash
+        ],
+        'heat' => [
+            'zone' => $heatZone,
+            'pct' => round($heatPct, 2)
         ]
     ];
     
@@ -404,20 +423,20 @@ try {
         $pdo->prepare("INSERT INTO game_logs (user_id, machine_id, bet, win, rtp_in, rtp_out, result, entropy_cache, reel_indices, xp_earned) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
             ->execute([$userId, $machineId, $actualBetDeducted, $spinWin, $actualBetDeducted, ($spinWin + $vaultSiphon), json_encode($logPayload), json_encode($entropy), json_encode($selectedIndices), $xpGain]);
     } catch (Exception $e) {
-        // V6.8.3 Fallback: If telemetry columns are missing from the DB, insert using legacy structure
+        // Fallback for missing columns
         $pdo->prepare("INSERT INTO game_logs (user_id, machine_id, bet, win, result, xp_earned) VALUES (?, ?, ?, ?, ?, ?)")
             ->execute([$userId, $machineId, $actualBetDeducted, $spinWin, json_encode($logPayload), $xpGain]);
     }
 
     $pdo->commit();
 
-    // SINGLE SOURCE OF TRUTH: Fetch Final Balance cleanly after all atomic operations complete
+    // SINGLE SOURCE OF TRUTH: Fetch Final Balance cleanly after all atomic operations
     $stmtBal = $pdo->prepare("SELECT balance FROM users WHERE id = ?");
     $stmtBal->execute([$userId]);
     $finalBal = (float)$stmtBal->fetchColumn();
 
     // --- PHASE 9: PF DATA PAYLOAD & VERIFICATION SPEC ---
-    echo json_encode([
+    $responseData = [
         'status' => 'success', 
         'stops' => $result, 
         'winning_lines' => $winningLines, 
@@ -444,12 +463,36 @@ try {
             'spin_hash' => $spinHash,
             'nonce' => $nonce,
             'algorithm' => 'HMAC_SHA256(key: SHA256(clientToken_nonce), message: SHA256(clientSeed_serverSeed))'
-        ]
-    ]);
+        ],
+        'gjp_heat' => [
+            'zone' => $heatZone,
+            'pct' => round($heatPct, 2)
+        ],
+        'jackpot_reserve_rate' => 0.05
+    ];
+
+    // V6.9: Cryptographic Response Signing
+    $signature = hash_hmac('sha256', json_encode($responseData), $serverSeed);
+    $responseData['signature'] = $signature;
+
+    $jsonOutput = json_encode($responseData);
+
+    if ($idempotencyKey && class_exists('Redis') && isset($GLOBALS['redis'])) {
+        $GLOBALS['redis']->setex("idem:$idempotencyKey", 60, $jsonOutput); // Cache response for 60s
+    }
+
+    echo $jsonOutput;
 
 } catch (Exception $e) {
     if (isset($pdo) && $pdo->inTransaction()) $pdo->rollBack();
-    http_response_code(400); 
-    echo json_encode(['error' => $e->getMessage()]);
+    
+    // Handle specific error codes thrown in Phase 3
+    $code = 'ERR_INTERNAL';
+    $status = 400;
+    if ($e->getCode() == 1) $code = 'ERR_MACHINE_SYNC';
+    elseif ($e->getCode() == 2) $code = 'ERR_SESSION_INVALID';
+    elseif ($e->getCode() == 3) { $code = 'ERR_INSUFFICIENT_FUNDS'; $status = 402; }
+
+    sendError($code, $e->getMessage(), $status);
 }
 ?>
