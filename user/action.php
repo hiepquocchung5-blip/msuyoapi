@@ -1,5 +1,5 @@
 <?php
-require_once __DIR__ . '/../../utils/admin_middleware.php'; 
+require_once __DIR__ . '/../utils/admin_middleware.php'; 
 
 // Only FINANCE or GOD can ban/reset
 $admin = authenticateAdmin($pdo, 'FINANCE');
