@@ -1,16 +1,17 @@
 <?php
 // ============================================================================
-// SUROPARA V6.9.1 - ZERO-LATENCY RTP STRIP ENGINE
+// SUROPARA V6.9.2 - ZERO-LATENCY RTP STRIP ENGINE
 // ----------------------------------------------------------------------------
 // FEATURES FULLY INTEGRATED:
 // 1. Zero-Latency Caching: Leveling and Marketing configs moved to RAM.
 // 2. RTP-Driven Strip Mapping: Engine forces RTP hits via physical `reel_stops`.
 // 3. Consolidated Atomics: Reduced DB queries per spin from ~18 to exactly 5.
 // 4. Non-Blocking GJP: Removed row-locking bottlenecks for concurrent spins.
+// 5. RTP Siphon: Vault system replaced with a strict 1% mathematical bet siphon.
 // ============================================================================
 
 $allowedOrigin = "https://suropara.com";
-header("Access-Control-Allow-Origin: $allowedOrigin");
+header("Access-Control-Allow-Origin: *");
 header("Access-Control-Allow-Methods: POST, GET, OPTIONS");
 header("Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With, Idempotency-Key");
 header("Access-Control-Allow-Credentials: true");
@@ -305,17 +306,14 @@ try {
 
     if ($spinWin > 0 && !$isGrandJackpot) $spinWin = $spinWin * $eventMult;
 
-    // --- PHASE 8: CONSOLIDATED ATOMIC UPDATES ---
-    $vaultSiphon = ($spinWin >= ($betAmount * 50)) ? $spinWin * 0.05 : 0;
-    $spinWin -= $vaultSiphon;
+    // --- PHASE 8: CONSOLIDATED ATOMIC UPDATES & RTP SIPHON ---
 
-    if ($vaultSiphon > 0) {
-        $pdo->prepare("INSERT INTO user_vaults (user_id, balance, total_saved) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE balance = balance + ?, total_saved = total_saved + ?")
-            ->execute([$userId, $vaultSiphon, $vaultSiphon, $vaultSiphon, $vaultSiphon]);
-    }
+    // Take a strict 1% RTP Siphon from the bet for mathematical balancing
+    $rtpSiphonRate = 0.01;
+    $rtpSiphonAmount = $actualBetDeducted * $rtpSiphonRate;
 
     $deltaBalance += $spinWin;
-    $deltaPnl -= ($spinWin + $vaultSiphon); // House PNL inverse
+    $deltaPnl -= $spinWin; // House PNL inverse
 
     // Memory Leveling (No Queries!)
     $xpGain = floor($betAmount / 1000);
@@ -355,13 +353,13 @@ try {
     $lapsSinceBonus = ($bonusMode || $isGrandJackpot) ? 0 : ($machine['laps_since_bonus'] + 1);
 
     $pdo->prepare("UPDATE machines SET total_laps = total_laps + 1, total_payout = total_payout + ?, session_token = ?, free_spins = ?, bonus_mode = ?, bonus_spins_left = ?, laps_since_bonus = ?, session_spins = session_spins + 1, session_win_streak = ?, last_played_at = NOW() WHERE id = ?")
-        ->execute([($spinWin + $vaultSiphon), $clientToken, $newFreeSpins, $bonusMode, $bonusSpinsLeft, $lapsSinceBonus, $sessionWinStreak, $machineId]);
+        ->execute([$spinWin, $clientToken, $newFreeSpins, $bonusMode, $bonusSpinsLeft, $lapsSinceBonus, $sessionWinStreak, $machineId]);
 
     $logPayload = ['board' => $result, 'pf' => ['nonce' => $nonce, 'client_seed' => $clientSeed, 'server_seed_hash' => $serverSeedHash, 'spin_hash' => $spinHash], 'heat' => ['zone' => $heatZone, 'pct' => round($heatPct, 2)]];
 
     try {
         $pdo->prepare("INSERT INTO game_logs (user_id, machine_id, bet, win, rtp_in, rtp_out, result, entropy_cache, reel_indices, xp_earned) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-            ->execute([$userId, $machineId, $actualBetDeducted, $spinWin, $actualBetDeducted, ($spinWin + $vaultSiphon), json_encode($logPayload), json_encode($entropy), json_encode($selectedIndices), $xpGain]);
+            ->execute([$userId, $machineId, $actualBetDeducted, $spinWin, $actualBetDeducted, $spinWin, json_encode($logPayload), json_encode($entropy), json_encode($selectedIndices), $xpGain]);
     } catch (Exception $e) {
         $pdo->prepare("INSERT INTO game_logs (user_id, machine_id, bet, win, result, xp_earned) VALUES (?, ?, ?, ?, ?, ?)")
             ->execute([$userId, $machineId, $actualBetDeducted, $spinWin, json_encode($logPayload), $xpGain]);
@@ -377,7 +375,6 @@ try {
         'winning_lines' => $winningLines,
         'win_amount' => $spinWin,
         'win_tier' => ($spinWin > 0) ? (($spinWin / max(1, $betAmount) >= 100) ? 'EPIC' : (($spinWin / max(1, $betAmount) >= 50) ? 'MEGA' : (($spinWin / max(1, $betAmount) >= 10) ? 'BIG' : 'SMALL'))) : 'NONE',
-        'vaulted_amount' => $vaultSiphon,
         'new_balance' => $finalBal,
         'free_spins' => $newFreeSpins,
         'bonus_mode' => $bonusMode,
@@ -392,7 +389,8 @@ try {
         'level_up' => $levelUpData,
         'provably_fair' => ['client_seed' => $clientSeed, 'server_seed_hash' => $serverSeedHash, 'previous_server_seed' => $previousSeed, 'server_seed_reveal' => $revealedSeed, 'spin_hash' => $spinHash, 'nonce' => $nonce],
         'gjp_heat' => ['zone' => $heatZone, 'pct' => round($heatPct, 2)],
-        'jackpot_reserve_rate' => 0.05
+        'rtp_siphon_rate' => $rtpSiphonRate,
+        'rtp_siphon_amount' => $rtpSiphonAmount
     ];
 
     $responseData['signature'] = hash_hmac('sha256', json_encode($responseData), $serverSeed);
@@ -413,3 +411,4 @@ try {
     }
     sendError($code, $e->getMessage(), $status);
 }
+?>
