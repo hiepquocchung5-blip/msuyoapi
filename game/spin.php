@@ -1,6 +1,6 @@
 <?php
 // ============================================================================
-// SUROPARA V6.9.2 - ZERO-LATENCY RTP STRIP ENGINE
+// SUROPARA V6.9.3 - ZERO-LATENCY RTP STRIP ENGINE
 // ----------------------------------------------------------------------------
 // FEATURES FULLY INTEGRATED:
 // 1. Zero-Latency Caching: Leveling and Marketing configs moved to RAM.
@@ -8,10 +8,11 @@
 // 3. Consolidated Atomics: Reduced DB queries per spin from ~18 to exactly 5.
 // 4. Non-Blocking GJP: Removed row-locking bottlenecks for concurrent spins.
 // 5. RTP Siphon: Vault system replaced with a strict 1% mathematical bet siphon.
+// 6. Pachislo Replay Clamp: Fixed Free Spin stacking; strictly 1 Replay per hit.
 // ============================================================================
 
 $allowedOrigin = "https://suropara.com";
-header("Access-Control-Allow-Origin: *");
+header("Access-Control-Allow-Origin: $allowedOrigin");
 header("Access-Control-Allow-Methods: POST, GET, OPTIONS");
 header("Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With, Idempotency-Key");
 header("Access-Control-Allow-Credentials: true");
@@ -280,9 +281,12 @@ try {
 
         if ($s1 === $s2 && $s2 === $s3) {
             $winningLines[] = $idx;
-            if ($s1 === 1) $isGrandJackpot = true; // Natural trigger
-            elseif ($s1 === 7) $freeSpinsEarned++;
-            elseif ($s1 === 3 && !$bonusMode) {
+            if ($s1 === 1) {
+                $isGrandJackpot = true; // Natural trigger
+            } elseif ($s1 === 7) {
+                // V6.9.3 FIX: Strict clamp. A Replay symbol hit guarantees exactly 1 Free Spin, preventing multi-line stacking.
+                $freeSpinsEarned = 1; 
+            } elseif ($s1 === 3 && !$bonusMode) {
                 $bonusModeTriggered = true;
                 $spinWin += $betAmount * $symMultipliers[$s1];
             } else {
@@ -341,7 +345,10 @@ try {
     }
 
     $sessionWinStreak = ($spinWin > 0) ? (int)($machine['session_win_streak'] ?? 0) + 1 : ((!$isFreeSpin && !$bonusMode) ? 0 : (int)($machine['session_win_streak'] ?? 0));
+    
+    // Smooth deterministic Free Spin state transition
     $newFreeSpins = $freeSpins > 0 ? $freeSpins - 1 + $freeSpinsEarned : $freeSpinsEarned;
+    
     if ($bonusSpinsLeft > 0) {
         $bonusSpinsLeft--;
         if ($bonusSpinsLeft <= 0 && $bonusMode !== 'HEAVEN') $bonusMode = null;
