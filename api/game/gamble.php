@@ -1,6 +1,6 @@
 <?php
 // api/game/gamble.php
-require_once __DIR__ . '/../utils/auth_middleware.php';
+require_once __DIR__ . '/../../utils/auth_middleware.php';
 
 $data = json_decode(file_get_contents("php://input"));
 

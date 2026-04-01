@@ -4,7 +4,7 @@
 // because the .htaccess file now handles it globally. 
 // Doubling up headers usually causes errors.
 
-require_once __DIR__ . '/../utils/auth_middleware.php'; 
+require_once __DIR__ . '/../../utils/auth_middleware.php'; 
 
 header("Content-Type: application/json; charset=UTF-8");
 

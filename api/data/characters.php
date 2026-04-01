@@ -1,5 +1,5 @@
 <?php
-require_once __DIR__ . '/../utils/auth_middleware.php'; 
+require_once __DIR__ . '/../../utils/auth_middleware.php'; 
 
 // Authentication is recommended to ensure only valid app users fetch data
 // If you want this public, you can remove this line.

@@ -1,5 +1,5 @@
 <?php
-require_once __DIR__ . '/../utils/auth_middleware.php'; 
+require_once __DIR__ . '/../../utils/auth_middleware.php'; 
 
 // Optional: specific auth check if this info is private
 // $user = authenticate($pdo);

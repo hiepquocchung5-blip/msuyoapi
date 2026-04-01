@@ -1,5 +1,5 @@
 <?php
-require_once __DIR__ . '/../utils/auth_middleware.php'; 
+require_once __DIR__ . '/../../utils/auth_middleware.php'; 
 
 // User authentication is optional for viewing public island data, 
 // but recommended to ensure the request comes from a valid client.

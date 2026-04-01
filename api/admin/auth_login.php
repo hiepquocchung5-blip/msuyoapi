@@ -1,6 +1,6 @@
 <?php
 // Correct path: Go up one level from /admin to /api, then into /utils
-require_once __DIR__ . '/../utils/auth_middleware.php'; 
+require_once __DIR__ . '/../../utils/auth_middleware.php'; 
 
 // Handle CORS
 header("Access-Control-Allow-Origin: *");

@@ -1,5 +1,5 @@
 <?php
-require_once __DIR__ . '/../utils/auth_middleware.php'; 
+require_once __DIR__ . '/../../utils/auth_middleware.php'; 
 
 // Allow CORS
 header("Access-Control-Allow-Origin: https://m.api.suropara.com");
