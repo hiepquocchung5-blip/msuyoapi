@@ -1,6 +1,6 @@
 <?php
 require_once __DIR__ . '/../../utils/auth_middleware.php'; 
-require_once __DIR__ . '/../utils/security.php';
+require_once __DIR__ . '/../../utils/security.php';
 
 header("Access-Control-Allow-Origin: https://suropara.com");
 header("Content-Type: application/json");

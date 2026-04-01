@@ -24,7 +24,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 require_once __DIR__ . '/../../utils/auth_middleware.php';
-require_once __DIR__ . '/../utils/security.php';
+require_once __DIR__ . '/../../utils/security.php';
 
 function sendError($code, $message, $httpStatus = 400)
 {
