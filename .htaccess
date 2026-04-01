@@ -1,32 +1,38 @@
-<IfModule mod_rewrite.c>
-    RewriteEngine On
+# ----------------------------------------------------------------------
+# SUROPARA BACKEND - AAA SECURITY GATEWAY
+# ----------------------------------------------------------------------
 
-    # 0. Force canonical API hostname (NO www)
-    RewriteCond %{HTTP_HOST} ^www\.api\.suropara\.com$ [NC]
-    RewriteRule ^(.*)$ https://api.suropara.com/$1 [L,R=301]
-
-    # 1. Force HTTPS
-    RewriteCond %{HTTPS} !=on
-    RewriteCond %{HTTP:X-Forwarded-Proto} !=https
-    RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
-
-    # 2. Preserve Authorization header
-    RewriteCond %{HTTP:Authorization} .
-    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
-
-    # 3. Handle CORS preflight properly
-    RewriteCond %{REQUEST_METHOD} OPTIONS
-    RewriteRule ^(.*)$ $1 [L]
-
-</IfModule>
-
-# 4. CORS headers
-<IfModule mod_headers.c>
-    Header always set Access-Control-Allow-Origin "https://suropara.com"
-    Header always set Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
-    Header always set Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With"
-    Header always set Access-Control-Allow-Credentials "true"
-</IfModule>
-
-# Disable directory listing
+# 1. Disable Directory Browsing (Critical Security)
 Options -Indexes
+
+# 2. Force HTTPS
+RewriteEngine On
+RewriteCond %{HTTPS} off
+RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+# 3. Strip .php Extensions (Masks your backend tech stack)
+# Allows your Next.js proxy to call /api/game/spin instead of spin.php
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteCond %{REQUEST_FILENAME}\.php -f
+RewriteRule ^(.*)$ $1.php [L]
+
+# 4. Strict CORS Headers (Prevent direct browser hits from unauthorized domains)
+<IfModule mod_headers.c>
+    # REPLACE with your actual Next.js frontend domain (e.g., https://suropara.com)
+    SetEnvIf Origin "^http(s)?://(www\.)?(localhost:3000|suropara\.com)$" AccessControlAllowOrigin=$0
+    Header always set Access-Control-Allow-Origin %{AccessControlAllowOrigin}e env=AccessControlAllowOrigin
+    
+    Header always set Access-Control-Allow-Methods "POST, GET, OPTIONS"
+    Header always set Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With, Idempotency-Key"
+    Header always set Access-Control-Allow-Credentials "true"
+    
+    # Handle Preflight OPTIONS requests instantly without hitting PHP
+    RewriteCond %{REQUEST_METHOD} OPTIONS
+    RewriteRule ^(.*)$ $1 [R=200,L]
+</IfModule>
+
+# 5. Protect Core Utility Files
+# Prevents direct URL access to your database config and middleware
+<FilesMatch "^(auth_middleware\.php|security\.php|database\.php)$">
+    Require all denied
+</FilesMatch>
