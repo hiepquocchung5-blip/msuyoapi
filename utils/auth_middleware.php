@@ -5,22 +5,9 @@
 // Handles CORS, Pre-flight routing, Token Extraction, and DB Auth Locks.
 // ============================================================================
 
-// --- 1. DYNAMIC CORS & HEADERS ---
-$origin = $_SERVER['HTTP_ORIGIN'] ?? '';
-$allowedDomains = [
-    'https://suropara.com', 
-    'https://m.suropara.com', 
-    'http://localhost:3000',
-    'https://localhost:3000'
-];
-
-if (in_array($origin, $allowedDomains)) {
-    header("Access-Control-Allow-Origin: $origin");
-} else {
-    // Safe fallback for strict environments
-    header("Access-Control-Allow-Origin: https://suropara.com"); 
-}
-
+// --- 1. STRICT CORS & HEADERS ---
+// Locked exclusively to the main production domain
+header("Access-Control-Allow-Origin: https://suropara.com");
 header("Access-Control-Allow-Credentials: true");
 header("Content-Type: application/json; charset=UTF-8");
 header("Access-Control-Allow-Methods: POST, GET, OPTIONS");
@@ -33,7 +20,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 // --- 2. CORE DEPENDENCIES ---
-// Correctly maps from /api/utils/ to /api/config/
+// Updated to target the nested api/config directory as requested
 require_once __DIR__ . '/../api/config/db.php';
 
 // --- 3. AUTHENTICATION ENGINE ---
