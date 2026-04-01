@@ -3,7 +3,7 @@
 
 // 1. Load Environment Variables
 // Using a simple custom loader for .env file if exists
-$envLoaderPath = __DIR__ . '/../utils/env_loader.php';
+$envLoaderPath = __DIR__ . '/../../utils/env_loader.php';
 if (file_exists($envLoaderPath)) {
     require_once $envLoaderPath;
 }
@@ -26,7 +26,7 @@ $charset = 'utf8mb4';
 
 // 3. API URL Configuration
 // Used for constructing image paths for the frontend/finance portal
-$apiUrl = getEnvSafe('API_PUBLIC_URL', 'https://apisuro.online/');
+$apiUrl = getEnvSafe('API_PUBLIC_URL', 'https://apisuro.online/api');
 
 if (!defined('API_BASE_URL')) {
     define('API_BASE_URL', $apiUrl);
