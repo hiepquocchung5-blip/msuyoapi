@@ -1,38 +1,64 @@
-# ----------------------------------------------------------------------
-# SUROPARA BACKEND - AAA SECURITY GATEWAY
-# ----------------------------------------------------------------------
+# ============================================================================
+# SUROPARA BACKEND - AAA SECURITY GATEWAY (.htaccess)
+# ============================================================================
 
 # 1. Disable Directory Browsing (Critical Security)
 Options -Indexes
 
-# 2. Force HTTPS
-RewriteEngine On
-RewriteCond %{HTTPS} off
-RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+<IfModule mod_rewrite.c>
+    RewriteEngine On
 
-# 3. Strip .php Extensions (Masks your backend tech stack)
-# Allows your Next.js proxy to call /api/game/spin instead of spin.php
-RewriteCond %{REQUEST_FILENAME} !-d
-RewriteCond %{REQUEST_FILENAME}\.php -f
-RewriteRule ^(.*)$ $1.php [L]
+    # 2. Force HTTPS
+    RewriteCond %{HTTPS} off
+    RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
 
-# 4. Strict CORS Headers (Prevent direct browser hits from unauthorized domains)
-<IfModule mod_headers.c>
-    # REPLACE with your actual Next.js frontend domain (e.g., https://suropara.com)
-    SetEnvIf Origin "^http(s)?://(www\.)?(localhost:3000|suropara\.com)$" AccessControlAllowOrigin=$0
-    Header always set Access-Control-Allow-Origin %{AccessControlAllowOrigin}e env=AccessControlAllowOrigin
-    
-    Header always set Access-Control-Allow-Methods "POST, GET, OPTIONS"
-    Header always set Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With, Idempotency-Key"
-    Header always set Access-Control-Allow-Credentials "true"
-    
-    # Handle Preflight OPTIONS requests instantly without hitting PHP
+    # 3. Authorization Header Pass-Through (CRITICAL FIX)
+    # Apache strips Bearer tokens by default. This forces it into the PHP environment.
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+    # 4. Fast-Path CORS Preflight (OPTIONS)
+    # Returns 204 (No Content) instantly. The hyphen (-) prevents URL rewriting loops.
     RewriteCond %{REQUEST_METHOD} OPTIONS
-    RewriteRule ^(.*)$ $1 [R=200,L]
+    RewriteRule ^ - [R=204,L]
+
+    # 5. Strip .php Extensions (Legacy Support / Fallback)
+    # Allows clean URLs if needed, but your frontend explicitly calls .php to prevent POST body drops.
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_FILENAME}\.php -f
+    RewriteRule ^(.*)$ $1.php [L]
+
+    # 6. Protect Internal Architecture
+    # Instantly throw a 403 Forbidden if anyone tries to directly access core folders
+    RewriteRule ^(api/config|api/utils|cron|utils|config)/.*$ - [F,L]
 </IfModule>
 
-# 5. Protect Core Utility Files
-# Prevents direct URL access to your database config and middleware
-<FilesMatch "^(auth_middleware\.php|security\.php|database\.php)$">
+<IfModule mod_headers.c>
+    # 7. Strip Duplicate PHP Headers (Fixes "Multiple CORS Values" Errors)
+    # If a PHP file tries to output 'Access-Control-Allow-Origin: *', Apache will delete it 
+    # to ensure ONLY our strict whitelist below is applied.
+    Header always unset Access-Control-Allow-Origin
+    Header always unset Access-Control-Allow-Credentials
+    Header always unset Access-Control-Allow-Methods
+    Header always unset Access-Control-Allow-Headers
+
+    # 8. Dynamic Strict CORS Policy (Whitelist)
+    SetEnvIf Origin "^http://localhost:3000$" ALLOWED_ORIGIN=$0
+    SetEnvIf Origin "^https://(www\.)?suropara\.com$" ALLOWED_ORIGIN=$0
+    SetEnvIf Origin "^https://m\.suropara\.com$" ALLOWED_ORIGIN=$0
+    
+    # 9. Apply Headers Safely (Only applies if the Origin matches the whitelist above)
+    Header always set Access-Control-Allow-Origin "%{ALLOWED_ORIGIN}e" env=ALLOWED_ORIGIN
+    Header always set Access-Control-Allow-Credentials "true" env=ALLOWED_ORIGIN
+    Header always set Access-Control-Allow-Methods "POST, GET, OPTIONS, PUT, DELETE" env=ALLOWED_ORIGIN
+    Header always set Access-Control-Allow-Headers "Origin, X-Requested-With, Content-Type, Accept, Authorization, Idempotency-Key" env=ALLOWED_ORIGIN
+    
+    # Cache the preflight check for 24 hours to speed up subsequent requests
+    Header always set Access-Control-Max-Age "86400" env=ALLOWED_ORIGIN
+</IfModule>
+
+# 10. Protect Core Utility Files & Configs
+# Prevents direct URL access to your environment variables and middleware
+<FilesMatch "(\.env|\.git|\.sql|\.md|database\.php|auth_middleware\.php|admin_middleware\.php|security\.php|env_loader\.php)$">
     Require all denied
-</FilesMatch>
+</FilesMatch>   
