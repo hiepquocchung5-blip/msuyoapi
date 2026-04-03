@@ -1,28 +1,40 @@
-# ----------------------------------------------------------------------
-# SUROPARA BACKEND - AAA SECURITY GATEWAY
-# ----------------------------------------------------------------------
+# ============================================================================
+# SUROPARA BACKEND - AAA SECURITY GATEWAY (.htaccess)
+# ============================================================================
 
 # 1. Disable Directory Browsing (Critical Security)
 Options -Indexes
 
-# 2. Force HTTPS
-RewriteEngine On
-RewriteCond %{HTTPS} off
-RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+<IfModule mod_rewrite.c>
+    RewriteEngine On
 
-# 3. Strip .php Extensions (Masks your backend tech stack)
-# Allows your Next.js proxy to call /api/game/spin instead of spin.php
-RewriteCond %{REQUEST_FILENAME} !-d
-RewriteCond %{REQUEST_FILENAME}\.php -f
-RewriteRule ^(.*)$ $1.php [L]
+    # 2. Force HTTPS
+    RewriteCond %{HTTPS} off
+    RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
 
-# 4. Strict CORS Headers (Prevent direct browser hits from unauthorized domains)
+    # 3. Authorization Header Pass-Through (CRITICAL FIX)
+    # Apache strips Bearer tokens by default. This forces it into the PHP environment.
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+    # 4. Strip .php Extensions (Legacy Support / Fallback)
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_FILENAME}\.php -f
+    RewriteRule ^(.*)$ $1.php [L]
+
+    # 5. Protect Internal Architecture
+    # Instantly throw a 403 Forbidden if anyone tries to directly access core folders
+    RewriteRule ^(api/config|api/utils|cron|utils|config)/.*$ - [F,L]
+</IfModule>
+
+# 6. Strict CORS Headers (Restored to proven working logic)
 <IfModule mod_headers.c>
-    # REPLACE with your actual Next.js frontend domain (e.g., https://suropara.com)
-    SetEnvIf Origin "^http(s)?://(www\.)?(localhost:3000|suropara\.com)$" AccessControlAllowOrigin=$0
-    Header always set Access-Control-Allow-Origin %{AccessControlAllowOrigin}e env=AccessControlAllowOrigin
+    # STRICTLY locked to the exact domain (no www) and local dev
+    SetEnvIf Origin "^https://suropara\.com$" AccessControlAllowOrigin=$0
+    SetEnvIf Origin "^http://localhost:3000$" AccessControlAllowOrigin=$0
     
-    Header always set Access-Control-Allow-Methods "POST, GET, OPTIONS"
+    Header always set Access-Control-Allow-Origin %{AccessControlAllowOrigin}e env=AccessControlAllowOrigin
+    Header always set Access-Control-Allow-Methods "POST, GET, OPTIONS, PUT, DELETE"
     Header always set Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With, Idempotency-Key"
     Header always set Access-Control-Allow-Credentials "true"
     
@@ -31,8 +43,8 @@ RewriteRule ^(.*)$ $1.php [L]
     RewriteRule ^(.*)$ $1 [R=200,L]
 </IfModule>
 
-# 5. Protect Core Utility Files
-# Prevents direct URL access to your database config and middleware
-<FilesMatch "^(auth_middleware\.php|security\.php|database\.php)$">
+# 7. Protect Core Utility Files & Configs
+# Prevents direct URL access to your environment variables and middleware
+<FilesMatch "(\.env|\.git|\.sql|\.md|database\.php|auth_middleware\.php|admin_middleware\.php|security\.php|env_loader\.php)$">
     Require all denied
 </FilesMatch>
