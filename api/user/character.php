@@ -1,15 +1,28 @@
 <?php
+// ============================================================================
+// SUROPARA API - COMPANION ROSTER & INVENTORY MATRIX
+// ============================================================================
+
 require_once __DIR__ . '/../../utils/auth_middleware.php'; 
 
+// 1. Explicit CORS & Preflight Handling (Failsafe)
+header("Access-Control-Allow-Origin: https://suropara.com");
+header("Content-Type: application/json; charset=UTF-8");
+header("Access-Control-Allow-Methods: GET, OPTIONS");
+header("Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With");
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
+// 2. Authenticate Operative
 $user = authenticate($pdo);
 $userId = $user['id'];
 
-header("Access-Control-Allow-Origin: https://suropara.com");
-header("Content-Type: application/json");
-
 try {
-    // Fetch all characters and flag ownership
-    // We join the master 'characters' table with the 'user_characters' inventory
+    // 3. Fetch Roster & Ownership Matrix
+    // Joins the master 'characters' table with the 'user_characters' inventory
     $sql = "
         SELECT 
             c.char_key, 
@@ -27,11 +40,16 @@ try {
     $stmt->execute([$userId]);
     $roster = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // Add metadata for frontend
+    // 4. Data Formatting & Telemetry Injection
     foreach ($roster as &$char) {
         $char['is_active'] = ($char['char_key'] === $user['active_pet_id']);
-        // Mock Affection Level (could be real DB column later)
-        $char['affection'] = $char['is_owned'] ? rand(1, 100) : 0;
+        
+        // Strict casting for React frontend logic
+        $char['is_owned'] = (bool)$char['is_owned'];
+        $char['is_premium'] = (bool)$char['is_premium'];
+        
+        // Mock Affection Level (Can be hooked into a real DB column for V11)
+        $char['affection'] = $char['is_owned'] ? rand(10, 100) : 0;
     }
 
     echo json_encode([
@@ -41,7 +59,13 @@ try {
     ]);
 
 } catch (PDOException $e) {
+    // Write detailed errors to server logs to keep the API response clean
+    error_log("Roster API Error: " . $e->getMessage());
+    
     http_response_code(500);
-    echo json_encode(['error' => 'Database error']);
+    echo json_encode([
+        'status' => 'error', 
+        'error' => 'Database error while fetching companion matrix.'
+    ]);
 }
 ?>
