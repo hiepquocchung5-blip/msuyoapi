@@ -3,7 +3,7 @@
 // SUROPARA API - SECURE REGISTRATION ENDPOINT
 // ============================================================================
 
-require_once __DIR__ . '/../utils/auth_middleware.php'; 
+require_once __DIR__ . '/../../utils/auth_middleware.php';
 
 // 1. Explicit CORS & Preflight Handling
 header("Access-Control-Allow-Origin: *");
