@@ -1,12 +1,12 @@
 <?php
 // ============================================================================
-// SUROPARA V7.3.0 - LEVIATHAN ALGORITHMIC GRID ENGINE (STRICT PF MODE)
+// SUROPARA V7.4.0 - LEVIATHAN ALGORITHMIC GRID ENGINE (STRICT PF MODE)
 // ----------------------------------------------------------------------------
 // 1. Algorithmic Grid: 100% Math-driven 3x3 matrix via SpinHash Entropy.
 // 2. Strict Provably Fair: mt_rand() eradicated. All drops are deterministic.
 // 3. Hard GJP Ceiling: Restored absolute must-hit cap triggers.
-// 4. Redis/DB Idempotency: Seamless failover caching to prevent double-spins.
-// 5. JIT Promos: Marketing multipliers queried instantly upon winning.
+// 4. Zero-Collision Paths (N1): Accidental multi-line wins are actively scrubbed.
+// 5. Rate Limit Security (N4): Trusted flag replaces hardcoded ID bypasses.
 // ============================================================================
 
 $allowedOrigin = "https://suropara.com";
@@ -101,9 +101,12 @@ $validBets = [100, 500, 1000, 5000, 10000, 20000, 50000, 100000, 250000, 500000,
 if (!in_array($betAmount, $validBets)) sendError('ERR_INVALID_BET', 'Unrecognized bet signature.');
 
 // Rate Limiter & Anomaly Detection (0.28s cooldown)
+// N4: Replaced hardcoded ID bypass with explicit `is_trusted` flag check
 if (session_status() === PHP_SESSION_NONE) session_start();
 $currentTime = microtime(true);
-if (isset($_SESSION['last_spin_time']) && ($currentTime - $_SESSION['last_spin_time']) < 0.28 && $userId >= 100) {
+$isTestAccount = isset($user['is_trusted']) && $user['is_trusted'] == 1;
+
+if (isset($_SESSION['last_spin_time']) && ($currentTime - $_SESSION['last_spin_time']) < 0.28 && !$isTestAccount) {
     sendError('ERR_RATE_LIMIT', 'Engine cooling down. Limit exceeded.', 429);
 }
 $_SESSION['last_spin_time'] = $currentTime;
@@ -200,12 +203,20 @@ try {
     $spinHash = hash_hmac('sha256', $nonceHash, hash('sha256', $clientSeed . $serverSeed));
 
     // T2: Extract 15 distinct chunks of entropy for full mathematical grid determination
+    // N2 Documentation: No slot reuse across execution paths.
+    // [0] = GJP Payline selection
+    // [1] = Organic Hit Symbol selection (Weighted)
+    // [2] = Organic Hit Payline selection
+    // [3] = GJP Probability Roll
+    // [4] = Base Hit Rate Roll
+    // [5-13] = Filler symbols for the 3x3 grid (used across all 3 hit/loss states)
+    // [14] = Collision disruption shifter (used to break accidental 3-of-a-kinds)
     $entropy = [];
     for ($i = 0; $i < 15; $i++) {
         $entropy[$i] = hexdec(substr(hash('sha256', $spinHash . $i), 0, 8)) / 4294967296;
     }
 
-    // --- PHASE 5: V7.3 MATHEMATICAL GJP ENGINE ---
+    // --- PHASE 5: V7.4 MATHEMATICAL GJP ENGINE ---
     $stmtJp = $pdo->prepare("SELECT current_amount, base_seed, trigger_amount, max_amount, contribution_rate FROM global_jackpots WHERE island_id = ?");
     $stmtJp->execute([$islandId]);
     $gjpData = $stmtJp->fetch(PDO::FETCH_ASSOC);
@@ -255,7 +266,7 @@ try {
         if ($entropy[3] <= $gjpProbability) $isGrandJackpot = true;
     }
 
-    // --- PHASE 6: V7.3 100% DETERMINISTIC GRID GENERATION ---
+    // --- PHASE 6: V7.4 100% DETERMINISTIC GRID GENERATION ---
     // T1: Streak Throttle Removed. Strict RTP variance rules applied naturally.
     $targetHitRate = $winRates['base_hit_rate'] / 100; 
     $isHit = ($entropy[4] <= $targetHitRate);
@@ -277,6 +288,22 @@ try {
                 $fillCursor++;
             }
         }
+
+        // N1 FIX: Scrub accidental secondary paylines in filler
+        $accidental = false;
+        do {
+            $accidental = false;
+            foreach ($paylines as $line) {
+                if ($line === $winLine) continue; // Skip intended line
+                if ($result[$line[0]] === $result[$line[1]] && $result[$line[1]] === $result[$line[2]]) {
+                    $accidental = true;
+                    $shift = (int)floor($entropy[14] * 5) + 1;
+                    $cIdx = array_search($result[$line[2]], $availableSyms);
+                    $result[$line[2]] = $availableSyms[($cIdx + $shift) % 6];
+                }
+            }
+        } while ($accidental);
+
     } elseif ($isHit) {
         // Weighted Organic Symbol Selection for Hit via Entropy[1]
         $symWeights = [2 => 5, 3 => 10, 4 => 20, 5 => 20, 6 => 30, 7 => 15];
@@ -295,15 +322,33 @@ try {
         
         // Fill remainder ensuring no accidental matching blocks are created
         $fillCursor = 5;
-        for ($i = 0; $i < 9; $i++) {
+        for ($i = 0; $i < 9; i++) {
             if ($result[$i] === 0) {
                 $filler = $availableSyms[(int)floor($entropy[$fillCursor] * 6)];
                 $result[$i] = ($filler === $winSym) ? ($filler === 7 ? 2 : $filler + 1) : $filler;
                 $fillCursor++;
             }
         }
+
+        // N1 FIX: Scrub accidental secondary paylines in filler
+        $accidental = false;
+        do {
+            $accidental = false;
+            foreach ($paylines as $line) {
+                if ($line === $winLine) continue; // Skip intended line
+                if ($result[$line[0]] === $result[$line[1]] && $result[$line[1]] === $result[$line[2]]) {
+                    $accidental = true;
+                    $shift = (int)floor($entropy[14] * 5) + 1;
+                    $cIdx = array_search($result[$line[2]], $availableSyms);
+                    // Ensure we don't accidentally shift it back to the winSym
+                    $newSym = $availableSyms[($cIdx + $shift) % 6];
+                    $result[$line[2]] = ($newSym === $winSym) ? $availableSyms[($cIdx + $shift + 1) % 6] : $newSym;
+                }
+            }
+        } while ($accidental);
+
     } else {
-        // T2: Zero-Collision Loss Generation using strict entropy (No mt_rand)
+        // T2: Zero Collision Generation using strict entropy (No mt_rand)
         for ($i = 0; $i < 9; $i++) {
             $result[$i] = $availableSyms[(int)floor($entropy[5 + $i] * 6)];
         }
@@ -311,7 +356,7 @@ try {
         // Deterministically disrupt any accidental paylines
         foreach ($paylines as $line) {
             if ($result[$line[0]] === $result[$line[1]] && $result[$line[1]] === $result[$line[2]]) {
-                $shift = (int)floor($entropy[14] * 5) + 1; // Shift by 1-5
+                $shift = (int)floor($entropy[14] * 5) + 1;
                 $currentIndex = array_search($result[$line[2]], $availableSyms);
                 $result[$line[2]] = $availableSyms[($currentIndex + $shift) % 6];
             }
@@ -374,6 +419,9 @@ try {
     $totalLevelReward = 0;
     $levelUpData = [];
 
+    // N3: Intended Behavior - We use a foreach loop instead of a while loop here to 
+    // deliberately reward players who bet massively and skip multiple levels at once, 
+    // granting them all accumulated rewards in a single spin payload.
     foreach ($levelConfigs as $lvl) {
         if ($lvl['level'] > $currentLevel && $newXp >= $lvl['xp_required']) {
             $currentLevel = $lvl['level'];
