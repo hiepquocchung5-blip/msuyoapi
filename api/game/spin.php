@@ -1,13 +1,12 @@
 <?php
 // ============================================================================
-// SUROPARA V7.1.0 - LEVIATHAN RTP STRIP ENGINE (STRICT & ELEGANT MODE)
+// SUROPARA V7.3.0 - LEVIATHAN ALGORITHMIC GRID ENGINE (STRICT PF MODE)
 // ----------------------------------------------------------------------------
-// FEATURES FULLY INTEGRATED:
-// 1. Dynamic GJP RTP: Symbol 1 mathematically bound to Target Base RTP (%).
-// 2. Dual-Track Math: 60% Action Hit Rate vs Strict High-Variance GJP.
-// 3. Burst Volatility: Heat Zones scale odds via DB configuration.
-// 4. Strict DB Enforcement: Zero hardcoded fallbacks; fails safe if unconfigured.
-// 5. Aesthetic Refactor: Cleaned up logic blocks, streamlined evaluations.
+// 1. Algorithmic Grid: 100% Math-driven 3x3 matrix via SpinHash Entropy.
+// 2. Strict Provably Fair: mt_rand() eradicated. All drops are deterministic.
+// 3. Hard GJP Ceiling: Restored absolute must-hit cap triggers.
+// 4. Redis/DB Idempotency: Seamless failover caching to prevent double-spins.
+// 5. JIT Promos: Marketing multipliers queried instantly upon winning.
 // ============================================================================
 
 $allowedOrigin = "https://suropara.com";
@@ -29,6 +28,15 @@ function sendError($code, $message, $httpStatus = 400) {
     http_response_code($httpStatus);
     echo json_encode(['status' => 'error', 'error' => ['code' => $code, 'message' => $message]]);
     exit;
+}
+
+if (!function_exists('getEnvSafe')) {
+    function getEnvSafe($key, $default = null) {
+        if (isset($_ENV[$key])) return $_ENV[$key];
+        if (isset($_SERVER[$key])) return $_SERVER[$key];
+        $val = getenv($key);
+        return $val !== false ? $val : $default;
+    }
 }
 
 class SystemCache {
@@ -66,11 +74,23 @@ $betAmount = (int)($data->bet_amount ?? 0);
 $machineId = (int)($data->machine_id ?? 0);
 $clientToken = $data->session_token ?? '';
 
-// Idempotency Check
+// T7: Idempotency Check with DB Fallback (No auto-migrate)
 $idempotencyKey = $_SERVER['HTTP_IDEMPOTENCY_KEY'] ?? ($data->idempotency_key ?? null);
-if ($idempotencyKey && class_exists('Redis') && isset($GLOBALS['redis']) && $GLOBALS['redis']->exists("idem:$idempotencyKey")) {
-    echo $GLOBALS['redis']->get("idem:$idempotencyKey");
-    exit;
+if ($idempotencyKey) {
+    $idemData = null;
+    if (class_exists('Redis') && isset($GLOBALS['redis'])) {
+        $idemData = $GLOBALS['redis']->get("idem:$idempotencyKey");
+    } else {
+        try {
+            $stmtIdem = $pdo->prepare("SELECT response_json FROM idempotency_cache WHERE idempotency_key = ? AND created_at > DATE_SUB(NOW(), INTERVAL 1 MINUTE)");
+            $stmtIdem->execute([$idempotencyKey]);
+            $idemData = $stmtIdem->fetchColumn();
+        } catch(Exception $e) {} // Fail silently if table issues, spin still succeeds
+    }
+    if ($idemData) {
+        echo $idemData;
+        exit;
+    }
 }
 
 $rawClientSeed = $data->client_seed ?? bin2hex(random_bytes(8));
@@ -97,21 +117,6 @@ try {
 
     if (!$islandId) throw new Exception("Machine connection lost. Re-link required.");
 
-    $virtualReels = SystemCache::get("reels:{$islandId}", function () use ($pdo, $islandId) {
-        $stmt = $pdo->prepare("SELECT reel_index, symbol_id FROM reel_stops WHERE island_id = ? ORDER BY reel_index ASC, stop_pos ASC");
-        $stmt->execute([$islandId]);
-        
-        $reels = [1 => [], 2 => [], 3 => []];
-        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $stop) {
-            $reels[(int)$stop['reel_index']][] = (int)$stop['symbol_id'];
-        }
-        
-        if (empty($reels[1]) || empty($reels[2]) || empty($reels[3])) {
-            throw new Exception("CRITICAL: Reel strips unconfigured for Sector #$islandId.");
-        }
-        return $reels;
-    }, 3600);
-
     $symMultipliers = SystemCache::get("payouts:{$islandId}", function () use ($pdo, $islandId) {
         $stmt = $pdo->prepare("SELECT * FROM island_symbol_payouts WHERE island_id = ?");
         $stmt->execute([$islandId]);
@@ -120,9 +125,10 @@ try {
         if (!$db) throw new Exception("CRITICAL: Payout matrix missing for Sector #$islandId.");
         
         return [
-            1 => (float)$db['sym_1_mult'], 2 => (float)$db['sym_2_mult'], 3 => (float)$db['sym_3_mult'], 
-            4 => (float)$db['sym_4_mult'], 5 => (float)$db['sym_5_mult'], 6 => (float)$db['sym_6_mult'], 
-            7 => (float)$db['sym_7_mult']
+            1 => 0.0, // T6: Explicitly 0.0 -> GJP pool is sym 1's sole payout
+            2 => (float)$db['sym_2_mult'], 3 => (float)$db['sym_3_mult'], 
+            4 => (float)$db['sym_4_mult'], 5 => (float)$db['sym_5_mult'], 
+            6 => (float)$db['sym_6_mult'], 7 => (float)$db['sym_7_mult']
         ];
     }, 3600);
 
@@ -144,11 +150,6 @@ try {
     $levelConfigs = SystemCache::get("level_configs", function () use ($pdo) {
         return $pdo->query("SELECT level, xp_required, reward_mmk FROM level_configs ORDER BY level ASC")->fetchAll(PDO::FETCH_ASSOC);
     }, 3600);
-
-    $eventMult = SystemCache::get("marketing_multiplier", function () use ($pdo) {
-        $stmt = $pdo->query("SELECT multiplier FROM marketing_events WHERE is_active = 1 AND start_time <= NOW() AND end_time > NOW() LIMIT 1");
-        return (float)($stmt->fetchColumn() ?: 1.0);
-    }, 60);
 
     // --- PHASE 3: ATOMIC LOCKS & STATE VALIDATION ---
     $pdo->beginTransaction();
@@ -183,7 +184,8 @@ try {
     $previousSeed = $machine['previous_server_seed'];
     $revealedSeed = null;
 
-    if (!$serverSeed || empty($machine['server_seed_hash']) || $sessionSpins === 0) {
+    // T11: Prevent unnecessary seed churn, only regenerate if completely empty
+    if (empty($serverSeed) || empty($machine['server_seed_hash'])) {
         $revealedSeed = $serverSeed;
         $previousSeed = $serverSeed;
         $serverSeed = bin2hex(random_bytes(32));
@@ -197,13 +199,13 @@ try {
     $nonceHash = hash('sha256', $clientToken . '_' . $nonce);
     $spinHash = hash_hmac('sha256', $nonceHash, hash('sha256', $clientSeed . $serverSeed));
 
-    // Extract 5 distinct chunks of entropy
+    // T2: Extract 15 distinct chunks of entropy for full mathematical grid determination
     $entropy = [];
-    for ($i = 0; $i < 5; $i++) {
+    for ($i = 0; $i < 15; $i++) {
         $entropy[$i] = hexdec(substr(hash('sha256', $spinHash . $i), 0, 8)) / 4294967296;
     }
 
-    // --- PHASE 5: V7.1 MATHEMATICAL GJP ENGINE ---
+    // --- PHASE 5: V7.3 MATHEMATICAL GJP ENGINE ---
     $stmtJp = $pdo->prepare("SELECT current_amount, base_seed, trigger_amount, max_amount, contribution_rate FROM global_jackpots WHERE island_id = ?");
     $stmtJp->execute([$islandId]);
     $gjpData = $stmtJp->fetch(PDO::FETCH_ASSOC);
@@ -211,14 +213,20 @@ try {
     if (!$gjpData) throw new Exception("CRITICAL: GJP matrix unconfigured for Sector #$islandId.");
 
     $currentJackpot = (float)$gjpData['current_amount'];
-    $gjpMax = (float)$gjpData['max_amount'];
+    $gjpMax = (float)$gjpData['max_amount']; // This is the must_hit_by ceiling
     $gjpBase = (float)$gjpData['base_seed'];
     $gjpContribRate = (float)$gjpData['contribution_rate'];
 
-    // Siphon Pot (Non-blocking async update)
+    // Siphon Pot
     if ($actualBetDeducted > 0) {
         $currentJackpot += ($actualBetDeducted * $gjpContribRate);
-        $pdo->prepare("UPDATE global_jackpots SET current_amount = current_amount + ? WHERE island_id = ?")->execute([$actualBetDeducted * $gjpContribRate, $islandId]);
+        
+        // T3: Hard Ceiling Restore (Cap pool at max_amount)
+        if ($currentJackpot >= $gjpMax) {
+            $currentJackpot = $gjpMax;
+        }
+
+        $pdo->prepare("UPDATE global_jackpots SET current_amount = ? WHERE island_id = ?")->execute([$currentJackpot, $islandId]);
     }
 
     $isGrandJackpot = false;
@@ -233,7 +241,7 @@ try {
     $burstVol = $winRates['volatility'];
     if ($currentJackpot >= $gjpMax) {
         $heatZone = 'MUST_HIT';
-        $isGrandJackpot = true;
+        $isGrandJackpot = true; // T3: Absolute force when pool reaches ceiling
     } elseif ($heatPct >= 80.0) {
         $heatZone = 'HOT';
         $gjpProbability *= ($burstVol * 2.0);
@@ -247,49 +255,70 @@ try {
         if ($entropy[3] <= $gjpProbability) $isGrandJackpot = true;
     }
 
-    // --- PHASE 6: DUAL-TRACK STRIP MAPPING ---
+    // --- PHASE 6: V7.3 100% DETERMINISTIC GRID GENERATION ---
+    // T1: Streak Throttle Removed. Strict RTP variance rules applied naturally.
     $targetHitRate = $winRates['base_hit_rate'] / 100; 
-    
-    // Streak Throttle
-    if ((int)($machine['session_win_streak'] ?? 0) > 10) $targetHitRate *= 0.8; 
-
     $isHit = ($entropy[4] <= $targetHitRate);
-    $targetR1 = $targetR2 = $targetR3 = 0;
+    
+    $paylines = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 4, 8], [6, 4, 2]];
+    $availableSyms = [2, 3, 4, 5, 6, 7];
+    $result = array_fill(0, 9, 0);
 
     if ($isGrandJackpot) {
-        $targetR1 = $targetR2 = $targetR3 = 1;
+        // Force GJP Line (Derive line deterministically)
+        $winLine = $paylines[(int)floor($entropy[0] * 5)];
+        foreach ($winLine as $pos) $result[$pos] = 1;
+        
+        // Fill remainder organically using entropy slices
+        $fillCursor = 5;
+        for ($i = 0; $i < 9; $i++) {
+            if ($result[$i] === 0) {
+                $result[$i] = $availableSyms[(int)floor($entropy[$fillCursor] * 6)];
+                $fillCursor++;
+            }
+        }
     } elseif ($isHit) {
-        $winSyms = [2, 3, 4, 5, 6, 7];
-        $targetR1 = $targetR2 = $targetR3 = $winSyms[array_rand($winSyms)];
+        // Weighted Organic Symbol Selection for Hit via Entropy[1]
+        $symWeights = [2 => 5, 3 => 10, 4 => 20, 5 => 20, 6 => 30, 7 => 15];
+        $totalWeight = array_sum($symWeights);
+        $randW = $entropy[1] * $totalWeight;
+        $winSym = 7;
+        $sum = 0;
+        foreach ($symWeights as $s => $w) {
+            $sum += $w;
+            if ($randW <= $sum) { $winSym = $s; break; }
+        }
+
+        // Line Selection via Entropy[2]
+        $winLine = $paylines[(int)floor($entropy[2] * 5)];
+        foreach ($winLine as $pos) $result[$pos] = $winSym;
+        
+        // Fill remainder ensuring no accidental matching blocks are created
+        $fillCursor = 5;
+        for ($i = 0; $i < 9; $i++) {
+            if ($result[$i] === 0) {
+                $filler = $availableSyms[(int)floor($entropy[$fillCursor] * 6)];
+                $result[$i] = ($filler === $winSym) ? ($filler === 7 ? 2 : $filler + 1) : $filler;
+                $fillCursor++;
+            }
+        }
     } else {
-        $targetR1 = $virtualReels[1][array_rand($virtualReels[1])];
-        $targetR2 = $virtualReels[2][array_rand($virtualReels[2])];
-        do {
-            $targetR3 = $virtualReels[3][array_rand($virtualReels[3])];
-        } while ($targetR1 == $targetR2 && $targetR2 == $targetR3);
-    }
-
-    $result = array_fill(0, 9, 0);
-    $selectedIndices = [];
-
-    // Map physical positions
-    for ($i = 1; $i <= 3; $i++) {
-        $targetSym = ($i == 1) ? $targetR1 : (($i == 2) ? $targetR2 : $targetR3);
-        $possibleIndices = array_keys($virtualReels[$i], $targetSym);
+        // T2: Zero-Collision Loss Generation using strict entropy (No mt_rand)
+        for ($i = 0; $i < 9; $i++) {
+            $result[$i] = $availableSyms[(int)floor($entropy[5 + $i] * 6)];
+        }
         
-        $stopIdx = empty($possibleIndices) ? array_rand($virtualReels[$i]) : $possibleIndices[array_rand($possibleIndices)];
-        $selectedIndices[] = $stopIdx;
-
-        $len = count($virtualReels[$i]);
-        $colOffset = $i - 1;
-        
-        $result[$colOffset]     = $virtualReels[$i][($stopIdx - 1 < 0) ? $len - 1 : $stopIdx - 1];
-        $result[$colOffset + 3] = $virtualReels[$i][$stopIdx];
-        $result[$colOffset + 6] = $virtualReels[$i][($stopIdx + 1 >= $len) ? 0 : $stopIdx + 1];
+        // Deterministically disrupt any accidental paylines
+        foreach ($paylines as $line) {
+            if ($result[$line[0]] === $result[$line[1]] && $result[$line[1]] === $result[$line[2]]) {
+                $shift = (int)floor($entropy[14] * 5) + 1; // Shift by 1-5
+                $currentIndex = array_search($result[$line[2]], $availableSyms);
+                $result[$line[2]] = $availableSyms[($currentIndex + $shift) % 6];
+            }
+        }
     }
 
     // --- PHASE 7: PAYLINE EVALUATION ---
-    $paylines = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 4, 8], [6, 4, 2]];
     $winningLines = [];
     $spinWin = 0;
     $freeSpinsEarned = 0;
@@ -312,6 +341,7 @@ try {
                 $spinWin += $betAmount * $symMultipliers[$s1];
             }
         } else {
+            // Teaser logic
             if ($s1 === $s2 && in_array($s1, [1, 2, 3])) {
                 $isTeaser = true;
                 if ($idx === 3 || $idx === 4) $isReachEye = true;
@@ -319,14 +349,19 @@ try {
         }
     }
 
-    // Process Grand Jackpot
+    // Process Grand Jackpot Payment
     if ($isGrandJackpot) {
         $spinWin += $currentJackpot;
         $pdo->prepare("UPDATE global_jackpots SET current_amount = ?, last_won_by = ?, last_won_amount = ?, last_won_at = NOW() WHERE island_id = ?")->execute([$gjpBase, $freshUser['username'], $currentJackpot, $islandId]);
         $pdo->prepare("INSERT INTO chat_messages (type, message, is_pinned) VALUES ('jackpot', ?, 1)")->execute(["🚨 ASTRONOMICAL! {$freshUser['username']} hit the GRAND JACKPOT for " . number_format($currentJackpot) . " MMK! 🚨"]);
     }
 
-    if ($spinWin > 0 && !$isGrandJackpot) $spinWin *= $eventMult;
+    // T9: JIT Marketing Promo Multiplier Fetch (Only run if win occurs)
+    if ($spinWin > 0 && !$isGrandJackpot) {
+        $stmtMult = $pdo->query("SELECT multiplier FROM marketing_events WHERE is_active = 1 AND start_time <= NOW() AND end_time > NOW() LIMIT 1");
+        $eventMult = (float)($stmtMult->fetchColumn() ?: 1.0);
+        $spinWin *= $eventMult;
+    }
 
     // --- PHASE 8: CONSOLIDATED STATE & DB WRITE ---
     $deltaBalance += $spinWin;
@@ -380,8 +415,8 @@ try {
     ];
 
     try {
-        $pdo->prepare("INSERT INTO game_logs (user_id, machine_id, bet, win, rtp_in, rtp_out, result, entropy_cache, reel_indices, xp_earned) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-            ->execute([$userId, $machineId, $actualBetDeducted, $spinWin, $actualBetDeducted, $spinWin, json_encode($logPayload), json_encode($entropy), json_encode($selectedIndices), $xpGain]);
+        $pdo->prepare("INSERT INTO game_logs (user_id, machine_id, bet, win, rtp_in, rtp_out, result, entropy_cache, xp_earned) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+            ->execute([$userId, $machineId, $actualBetDeducted, $spinWin, $actualBetDeducted, $spinWin, json_encode($logPayload), json_encode($entropy), $xpGain]);
     } catch (Exception $e) {
         $pdo->prepare("INSERT INTO game_logs (user_id, machine_id, bet, win, result, xp_earned) VALUES (?, ?, ?, ?, ?, ?)")
             ->execute([$userId, $machineId, $actualBetDeducted, $spinWin, json_encode($logPayload), $xpGain]);
@@ -389,9 +424,13 @@ try {
 
     $pdo->commit();
 
-    $finalBal = (float)$freshUser['balance'] + $deltaBalance;
+    // T4: Post-Commit Re-Query for absolute truth balance
+    $stmtFinalBal = $pdo->prepare("SELECT balance FROM users WHERE id = ?");
+    $stmtFinalBal->execute([$userId]);
+    $finalBal = (float)$stmtFinalBal->fetchColumn();
 
     // --- PHASE 9: PAYLOAD CONSTRUCTION ---
+    // T5: Ghost siphon fields explicitly removed
     $responseData = [
         'status' => 'success',
         'stops' => $result,
@@ -409,17 +448,27 @@ try {
         'is_teaser' => $isTeaser,
         'is_reach_eye' => $isReachEye,
         'is_jackpot' => $isGrandJackpot,
+        'jackpot_visual_override' => $isGrandJackpot, // T10: Force frontend JP sequence on algorithm hit
         'level_up' => $levelUpData,
         'provably_fair' => ['client_seed' => $clientSeed, 'server_seed_hash' => $serverSeedHash, 'previous_server_seed' => $previousSeed, 'server_seed_reveal' => $revealedSeed, 'spin_hash' => $spinHash, 'nonce' => $nonce],
-        'gjp_heat' => ['zone' => $heatZone, 'pct' => round($heatPct, 2)],
-        'rtp_siphon_rate' => 0.01,
-        'rtp_siphon_amount' => $actualBetDeducted * 0.01
+        'gjp_heat' => ['zone' => $heatZone, 'pct' => round($heatPct, 2)]
     ];
 
-    $responseData['signature'] = hash_hmac('sha256', json_encode($responseData), $serverSeed);
+    // T8: Signature Stability via APP_KEY
+    $appKey = getEnvSafe('APP_KEY', 'default_suropara_secret_key');
+    $responseData['signature'] = hash_hmac('sha256', json_encode($responseData), $appKey);
     $jsonOutput = json_encode($responseData);
 
-    if ($idempotencyKey && class_exists('Redis') && isset($GLOBALS['redis'])) $GLOBALS['redis']->setex("idem:$idempotencyKey", 60, $jsonOutput);
+    // T7: Dual-Layer Idempotency Saving (No auto-migrate)
+    if ($idempotencyKey) {
+        if (class_exists('Redis') && isset($GLOBALS['redis'])) {
+            $GLOBALS['redis']->setex("idem:$idempotencyKey", 60, $jsonOutput);
+        } else {
+            try {
+                $pdo->prepare("INSERT INTO idempotency_cache (idempotency_key, response_json) VALUES (?, ?) ON DUPLICATE KEY UPDATE response_json = VALUES(response_json)")->execute([$idempotencyKey, $jsonOutput]);
+            } catch(Exception $e) {} // Fail silently if table issues, spin still succeeds
+        }
+    }
 
     echo $jsonOutput;
     
