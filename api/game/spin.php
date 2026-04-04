@@ -1,12 +1,12 @@
 <?php
 // ============================================================================
-// SUROPARA V7.4.0 - LEVIATHAN ALGORITHMIC GRID ENGINE (STRICT PF MODE)
+// SUROPARA V7.4.1 - LEVIATHAN ALGORITHMIC GRID ENGINE (STRICT PF MODE)
 // ----------------------------------------------------------------------------
 // 1. Algorithmic Grid: 100% Math-driven 3x3 matrix via SpinHash Entropy.
 // 2. Strict Provably Fair: mt_rand() eradicated. All drops are deterministic.
 // 3. Hard GJP Ceiling: Restored absolute must-hit cap triggers.
-// 4. Zero-Collision Paths (N1): Accidental multi-line wins are actively scrubbed.
-// 5. Rate Limit Security (N4): Trusted flag replaces hardcoded ID bypasses.
+// 4. Zero-Collision Paths: Accidental multi-line wins are actively scrubbed.
+// 5. Emergency Patch (V7.4.1): Loop caps, FOR UPDATE locks, and syntax fixes.
 // ============================================================================
 
 $allowedOrigin = "https://suropara.com";
@@ -85,7 +85,9 @@ if ($idempotencyKey) {
             $stmtIdem = $pdo->prepare("SELECT response_json FROM idempotency_cache WHERE idempotency_key = ? AND created_at > DATE_SUB(NOW(), INTERVAL 1 MINUTE)");
             $stmtIdem->execute([$idempotencyKey]);
             $idemData = $stmtIdem->fetchColumn();
-        } catch(Exception $e) {} // Fail silently if table issues, spin still succeeds
+        } catch(Exception $e) { 
+            error_log('[SUROPARA_IDEM] Fetch failed: ' . $e->getMessage()); 
+        } // Fail silently if table issues, spin still succeeds
     }
     if ($idemData) {
         echo $idemData;
@@ -217,7 +219,8 @@ try {
     }
 
     // --- PHASE 5: V7.4 MATHEMATICAL GJP ENGINE ---
-    $stmtJp = $pdo->prepare("SELECT current_amount, base_seed, trigger_amount, max_amount, contribution_rate FROM global_jackpots WHERE island_id = ?");
+    // R4: Added FOR UPDATE to lock the GJP row, preventing concurrent contributions from overlapping
+    $stmtJp = $pdo->prepare("SELECT current_amount, base_seed, trigger_amount, max_amount, contribution_rate FROM global_jackpots WHERE island_id = ? FOR UPDATE");
     $stmtJp->execute([$islandId]);
     $gjpData = $stmtJp->fetch(PDO::FETCH_ASSOC);
 
@@ -291,10 +294,13 @@ try {
 
         // N1 FIX: Scrub accidental secondary paylines in filler
         $accidental = false;
+        $repairPass = 0; // R3: Infinite loop protection
         do {
             $accidental = false;
             foreach ($paylines as $line) {
+                // R1: Array equality (===) works here safely because paylines are strictly defined and distinct.
                 if ($line === $winLine) continue; // Skip intended line
+                
                 if ($result[$line[0]] === $result[$line[1]] && $result[$line[1]] === $result[$line[2]]) {
                     $accidental = true;
                     $shift = (int)floor($entropy[14] * 5) + 1;
@@ -302,6 +308,7 @@ try {
                     $result[$line[2]] = $availableSyms[($cIdx + $shift) % 6];
                 }
             }
+            if (++$repairPass > 10) break; // Break out if geometrically impossible to resolve without deep recursion
         } while ($accidental);
 
     } elseif ($isHit) {
@@ -322,7 +329,8 @@ try {
         
         // Fill remainder ensuring no accidental matching blocks are created
         $fillCursor = 5;
-        for ($i = 0; $i < 9; i++) {
+        // FATAL BUG FIX: Corrected i++ to $i++
+        for ($i = 0; $i < 9; $i++) {
             if ($result[$i] === 0) {
                 $filler = $availableSyms[(int)floor($entropy[$fillCursor] * 6)];
                 $result[$i] = ($filler === $winSym) ? ($filler === 7 ? 2 : $filler + 1) : $filler;
@@ -332,10 +340,13 @@ try {
 
         // N1 FIX: Scrub accidental secondary paylines in filler
         $accidental = false;
+        $repairPass = 0; // R3: Infinite loop protection
         do {
             $accidental = false;
             foreach ($paylines as $line) {
+                // R1: Array equality (===) works here safely because paylines are strictly defined and distinct.
                 if ($line === $winLine) continue; // Skip intended line
+                
                 if ($result[$line[0]] === $result[$line[1]] && $result[$line[1]] === $result[$line[2]]) {
                     $accidental = true;
                     $shift = (int)floor($entropy[14] * 5) + 1;
@@ -345,6 +356,7 @@ try {
                     $result[$line[2]] = ($newSym === $winSym) ? $availableSyms[($cIdx + $shift + 1) % 6] : $newSym;
                 }
             }
+            if (++$repairPass > 10) break; // Break out if geometrically impossible to resolve without deep recursion
         } while ($accidental);
 
     } else {
@@ -354,13 +366,20 @@ try {
         }
         
         // Deterministically disrupt any accidental paylines
-        foreach ($paylines as $line) {
-            if ($result[$line[0]] === $result[$line[1]] && $result[$line[1]] === $result[$line[2]]) {
-                $shift = (int)floor($entropy[14] * 5) + 1;
-                $currentIndex = array_search($result[$line[2]], $availableSyms);
-                $result[$line[2]] = $availableSyms[($currentIndex + $shift) % 6];
+        $accidental = false;
+        $repairPass = 0; // R3: Infinite loop protection
+        do {
+            $accidental = false;
+            foreach ($paylines as $line) {
+                if ($result[$line[0]] === $result[$line[1]] && $result[$line[1]] === $result[$line[2]]) {
+                    $accidental = true;
+                    $shift = (int)floor($entropy[14] * 5) + 1;
+                    $currentIndex = array_search($result[$line[2]], $availableSyms);
+                    $result[$line[2]] = $availableSyms[($currentIndex + $shift) % 6];
+                }
             }
-        }
+            if (++$repairPass > 10) break;
+        } while ($accidental);
     }
 
     // --- PHASE 7: PAYLINE EVALUATION ---
@@ -514,7 +533,9 @@ try {
         } else {
             try {
                 $pdo->prepare("INSERT INTO idempotency_cache (idempotency_key, response_json) VALUES (?, ?) ON DUPLICATE KEY UPDATE response_json = VALUES(response_json)")->execute([$idempotencyKey, $jsonOutput]);
-            } catch(Exception $e) {} // Fail silently if table issues, spin still succeeds
+            } catch(Exception $e) {
+                error_log('[SUROPARA_IDEM] Save failed: ' . $e->getMessage());
+            } // Fail silently if table issues, spin still succeeds
         }
     }
 
