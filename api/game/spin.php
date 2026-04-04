@@ -1,14 +1,13 @@
 <?php
 // ============================================================================
-// SUROPARA V6.9.3 - ZERO-LATENCY RTP STRIP ENGINE
+// SUROPARA V7.0.1 - LEVIATHAN RTP STRIP ENGINE (STRICT DB MODE)
 // ----------------------------------------------------------------------------
 // FEATURES FULLY INTEGRATED:
-// 1. Zero-Latency Caching: Leveling and Marketing configs moved to RAM.
-// 2. RTP-Driven Strip Mapping: Engine forces RTP hits via physical `reel_stops`.
-// 3. Consolidated Atomics: Reduced DB queries per spin from ~18 to exactly 5.
-// 4. Non-Blocking GJP: Removed row-locking bottlenecks for concurrent spins.
-// 5. RTP Siphon: Vault system replaced with a strict 1% mathematical bet siphon.
-// 6. Pachislo Replay Clamp: Fixed Free Spin stacking; strictly 1 Replay per hit.
+// 1. Dynamic GJP RTP: Symbol 1 strictly controlled by Target Base RTP (%).
+// 2. Dual-Track Math: Base Hit Rate for Syms 2-7 (Action) + Strict GJP.
+// 3. Burst Volatility: Heat Zones multiply odds safely via DB config.
+// 4. Strict DB Enforcement: All dummy/fallback data removed. Fails safely if unconfigured.
+// 5. Anti-Farming: Free spins isolated from Progressive pool.
 // ============================================================================
 
 $allowedOrigin = "https://suropara.com";
@@ -77,7 +76,7 @@ $clientSeed = substr(preg_replace('/[^a-zA-Z0-9]/', '', $rawClientSeed), 0, 32);
 $validBets = [100, 500, 1000, 5000, 10000, 20000, 50000, 100000, 250000, 500000, 1000000];
 if (!in_array($betAmount, $validBets)) sendError('ERR_INVALID_BET', 'Invalid bet signature.');
 
-// Rate Limiter
+// Rate Limiter (0.28s cooldown)
 if (session_status() === PHP_SESSION_NONE) session_start();
 $currentTime = microtime(true);
 if (isset($_SESSION['last_spin_time']) && ($currentTime - $_SESSION['last_spin_time']) < 0.28 && $userId >= 100) {
@@ -87,17 +86,24 @@ $_SESSION['last_spin_time'] = $currentTime;
 session_write_close();
 
 try {
-    // --- PHASE 2: RAM CACHING (ELIMINATES DATABASE DELAYS) ---
+    // --- PHASE 2: RAM CACHING (STRICT DATABASE MODE) ---
     $stmtQuick = $pdo->prepare("SELECT island_id FROM machines WHERE id = ?");
     $stmtQuick->execute([$machineId]);
     $islandId = (int)$stmtQuick->fetchColumn();
+
+    if (!$islandId) throw new Exception("Machine mapping failed.");
 
     $virtualReels = SystemCache::get("reels:{$islandId}", function () use ($pdo, $islandId) {
         $stmt = $pdo->prepare("SELECT reel_index, symbol_id FROM reel_stops WHERE island_id = ? ORDER BY reel_index ASC, stop_pos ASC");
         $stmt->execute([$islandId]);
         $reels = [1 => [], 2 => [], 3 => []];
-        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $stop) $reels[(int)$stop['reel_index']][] = (int)$stop['symbol_id'];
-        for ($i = 1; $i <= 3; $i++) if (empty($reels[$i])) $reels[$i] = [6, 4, 2, 6, 5, 3, 6, 7, 6, 4, 2, 6, 5, 3, 6, 7, 6, 2, 4, 6, 5, 7, 6, 3, 2, 6, 4, 5, 6, 7];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $stop) {
+            $reels[(int)$stop['reel_index']][] = (int)$stop['symbol_id'];
+        }
+        // STRICT DB ENFORCEMENT: No fallbacks allowed.
+        if (empty($reels[1]) || empty($reels[2]) || empty($reels[3])) {
+            throw new Exception("CRITICAL: Reel strips not configured in database for Island #$islandId");
+        }
         return $reels;
     }, 3600);
 
@@ -105,13 +111,35 @@ try {
         $stmt = $pdo->prepare("SELECT * FROM island_symbol_payouts WHERE island_id = ?");
         $stmt->execute([$islandId]);
         $db = $stmt->fetch(PDO::FETCH_ASSOC);
-        return [2 => (float)($db['sym_2_mult'] ?? 20.0), 3 => (float)($db['sym_3_mult'] ?? 10.0), 4 => (float)($db['sym_4_mult'] ?? 10.0), 5 => (float)($db['sym_5_mult'] ?? 15.0), 6 => (float)($db['sym_6_mult'] ?? 2.0), 7 => (float)($db['sym_7_mult'] ?? 0.0)];
+        
+        // STRICT DB ENFORCEMENT: No dummy multipliers.
+        if (!$db) throw new Exception("CRITICAL: Payout multipliers missing for Island #$islandId");
+        
+        return [
+            1 => (float)$db['sym_1_mult'],
+            2 => (float)$db['sym_2_mult'], 
+            3 => (float)$db['sym_3_mult'], 
+            4 => (float)$db['sym_4_mult'], 
+            5 => (float)$db['sym_5_mult'], 
+            6 => (float)$db['sym_6_mult'], 
+            7 => (float)$db['sym_7_mult']
+        ];
     }, 3600);
 
-    $winRates = SystemCache::get("win_rates:{$islandId}", function () use ($pdo, $islandId) {
-        $stmt = $pdo->prepare("SELECT base_hit_rate FROM island_win_rates WHERE island_id = ?");
+    $winRates = SystemCache::get("win_rates_v7:{$islandId}", function () use ($pdo, $islandId) {
+        $stmt = $pdo->prepare("SELECT base_hit_rate, target_base_rtp, max_rtp_cap, burst_volatility FROM island_win_rates WHERE island_id = ?");
         $stmt->execute([$islandId]);
-        return (float)($stmt->fetchColumn() ?: 22.0);
+        $res = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        // STRICT DB ENFORCEMENT: No dummy RTP rates.
+        if (!$res) throw new Exception("CRITICAL: RTP configurations missing for Island #$islandId");
+        
+        return [
+            'base_hit_rate' => (float)$res['base_hit_rate'],
+            'gjp_rtp'       => (float)$res['target_base_rtp'],
+            'max_rtp'       => (float)$res['max_rtp_cap'],
+            'volatility'    => (float)$res['burst_volatility']
+        ];
     }, 3600);
 
     $levelConfigs = SystemCache::get("level_configs", function () use ($pdo) {
@@ -147,7 +175,6 @@ try {
 
     if ((float)$freshUser['balance'] < $actualBetDeducted) throw new Exception("Insufficient balance.", 3);
 
-    // Prepare consolidated financial deltas
     $deltaBalance = -$actualBetDeducted;
     $deltaPnl = $actualBetDeducted;
 
@@ -175,65 +202,78 @@ try {
         $entropy[$i] = hexdec(substr(hash('sha256', $spinHash . $i), 0, 8)) / 4294967296;
     }
 
-    // --- PHASE 5: NON-BLOCKING GJP ENGINE ---
-    // Fetch without FOR UPDATE to prevent lock contention delay
-    $stmtJp = $pdo->prepare("SELECT current_amount, base_seed, trigger_amount, max_amount FROM global_jackpots WHERE island_id = ?");
+    // --- PHASE 5: V7.0.1 MATHEMATICAL GJP ENGINE (STRICT) ---
+    $stmtJp = $pdo->prepare("SELECT current_amount, base_seed, trigger_amount, max_amount, contribution_rate FROM global_jackpots WHERE island_id = ?");
     $stmtJp->execute([$islandId]);
-    $gjpData = $stmtJp->fetch();
+    $gjpData = $stmtJp->fetch(PDO::FETCH_ASSOC);
 
-    $currentJackpot = (float)($gjpData['current_amount'] ?? 3000000);
-    $gjpMax = (float)($gjpData['max_amount'] ?? 7200000);
+    // STRICT DB ENFORCEMENT: No dummy jackpot fallbacks
+    if (!$gjpData) throw new Exception("CRITICAL: Global Jackpot not configured for Island #$islandId");
+
+    $currentJackpot = (float)$gjpData['current_amount'];
+    $gjpMax = (float)$gjpData['max_amount'];
+    $gjpBase = (float)$gjpData['base_seed'];
+    $gjpContribRate = (float)$gjpData['contribution_rate'];
 
     if ($actualBetDeducted > 0) {
-        $currentJackpot += ($actualBetDeducted * 0.015);
+        $currentJackpot += ($actualBetDeducted * $gjpContribRate);
         // Fast, non-blocking asynchronous update
-        $pdo->prepare("UPDATE global_jackpots SET current_amount = current_amount + ? WHERE island_id = ?")->execute([$actualBetDeducted * 0.015, $islandId]);
+        $pdo->prepare("UPDATE global_jackpots SET current_amount = current_amount + ? WHERE island_id = ?")->execute([$actualBetDeducted * $gjpContribRate, $islandId]);
     }
 
     $isGrandJackpot = false;
-    $heatPct = min(100, max(0, ($currentJackpot / max(1, $gjpMax)) * 100));
+    $heatPct = min(100, max(0, (($currentJackpot - $gjpBase) / max(1, ($gjpMax - $gjpBase))) * 100));
     $heatZone = 'COLD';
-    $oddsModifier = 1.0;
+    
+    // MATHEMATICAL TRUE RTP: Probability = (Target RTP * Bet) / Current Jackpot Payout
+    $gjpTargetRtp = $winRates['gjp_rtp'] / 100;
+    $gjpProbability = 0;
+    
+    if ($actualBetDeducted > 0) {
+        $gjpProbability = ($gjpTargetRtp * $betAmount) / max(1, $currentJackpot);
+    }
 
-    if ($heatPct >= 95.0 || $currentJackpot >= $gjpMax) {
+    // Apply Burst Volatility based on Heat Zone
+    $burstVol = $winRates['volatility'];
+    if ($currentJackpot >= $gjpMax) {
         $heatZone = 'MUST_HIT';
         $isGrandJackpot = true;
     } elseif ($heatPct >= 80.0) {
         $heatZone = 'HOT';
-        $oddsModifier = 4.0;
+        $gjpProbability *= ($burstVol * 2.0); // Extreme FOMO phase
     } elseif ($heatPct >= 50.0) {
         $heatZone = 'WARM';
-        $oddsModifier = 2.0;
+        $gjpProbability *= $burstVol;
     }
 
-    if (!$isGrandJackpot && !$isFreeSpin && !$bonusMode) {
-        $baseOdds = max(500, (int)(15000000 / max(1, $betAmount)));
-        $adjustedOdds = max(2, (int)($baseOdds / $oddsModifier));
-        if ($entropy[3] <= (1 / $adjustedOdds)) $isGrandJackpot = true;
+    // Trigger check (Disabled during free spins to prevent farming)
+    if (!$isGrandJackpot && !$isFreeSpin && !$bonusMode && $actualBetDeducted > 0) {
+        if ($entropy[3] <= $gjpProbability) {
+            $isGrandJackpot = true;
+        }
     }
 
-    // --- PHASE 6: RTP-DRIVEN PHYSICAL STRIP MAPPING ---
-    // Calculates win/loss from RTP first, then forcefully maps physical reel stops to match.
-    $targetHitRate = $winRates / 100;
+    // --- PHASE 6: DUAL-TRACK STRIP MAPPING ---
+    $targetHitRate = $winRates['base_hit_rate'] / 100; 
+    
+    // Max RTP Cap Throttle: If session streak is insane, reduce standard hit rate slightly
+    if ((int)($machine['session_win_streak'] ?? 0) > 10) {
+        $targetHitRate *= 0.8; 
+    }
+
     $isHit = ($entropy[4] <= $targetHitRate);
-
-    $targetR1 = 0;
-    $targetR2 = 0;
-    $targetR3 = 0;
+    $targetR1 = 0; $targetR2 = 0; $targetR3 = 0;
 
     if ($isGrandJackpot) {
-        $targetR1 = 1;
-        $targetR2 = 1;
-        $targetR3 = 1;
+        // Force Symbol 1 (GJP)
+        $targetR1 = 1; $targetR2 = 1; $targetR3 = 1;
     } elseif ($isHit) {
-        // Pick random winning symbol (excluding 1)
+        // Pick random winning symbol (excluding 1) -> Syms 2-7 freely go around
         $winSyms = [2, 3, 4, 5, 6, 7];
         $winSym = $winSyms[array_rand($winSyms)];
-        $targetR1 = $winSym;
-        $targetR2 = $winSym;
-        $targetR3 = $winSym;
+        $targetR1 = $winSym; $targetR2 = $winSym; $targetR3 = $winSym;
     } else {
-        // Force Loss
+        // Force Loss Mapping
         $targetR1 = $virtualReels[1][array_rand($virtualReels[1])];
         $targetR2 = $virtualReels[2][array_rand($virtualReels[2])];
         do {
@@ -246,7 +286,6 @@ try {
 
     for ($i = 1; $i <= 3; $i++) {
         $targetSym = ($i == 1) ? $targetR1 : (($i == 2) ? $targetR2 : $targetR3);
-
         $possibleIndices = [];
         foreach ($virtualReels[$i] as $idx => $sym) {
             if ($sym == $targetSym) $possibleIndices[] = $idx;
@@ -282,9 +321,8 @@ try {
         if ($s1 === $s2 && $s2 === $s3) {
             $winningLines[] = $idx;
             if ($s1 === 1) {
-                $isGrandJackpot = true; // Natural trigger
+                $isGrandJackpot = true; // Safety trigger
             } elseif ($s1 === 7) {
-                // V6.9.3 FIX: Strict clamp. A Replay symbol hit guarantees exactly 1 Free Spin, preventing multi-line stacking.
                 $freeSpinsEarned = 1; 
             } elseif ($s1 === 3 && !$bonusMode) {
                 $bonusModeTriggered = true;
@@ -303,23 +341,20 @@ try {
     // GJP Payout & Reset
     if ($isGrandJackpot) {
         $spinWin += $currentJackpot;
-        $baseSeed = (float)($gjpData['base_seed'] ?? 3000000);
-        $pdo->prepare("UPDATE global_jackpots SET current_amount = ?, last_won_by = ?, last_won_amount = ?, last_won_at = NOW() WHERE island_id = ?")->execute([$baseSeed, $freshUser['username'], $currentJackpot, $islandId]);
+        $pdo->prepare("UPDATE global_jackpots SET current_amount = ?, last_won_by = ?, last_won_amount = ?, last_won_at = NOW() WHERE island_id = ?")->execute([$gjpBase, $freshUser['username'], $currentJackpot, $islandId]);
         $pdo->prepare("INSERT INTO chat_messages (type, message, is_pinned) VALUES ('jackpot', ?, 1)")->execute(["🚨 ASTRONOMICAL! {$freshUser['username']} hit the GRAND JACKPOT for " . number_format($currentJackpot) . " MMK! 🚨"]);
     }
 
     if ($spinWin > 0 && !$isGrandJackpot) $spinWin = $spinWin * $eventMult;
 
     // --- PHASE 8: CONSOLIDATED ATOMIC UPDATES & RTP SIPHON ---
-
-    // Take a strict 1% RTP Siphon from the bet for mathematical balancing
-    $rtpSiphonRate = 0.01;
+    $rtpSiphonRate = 0.01; // 1%
     $rtpSiphonAmount = $actualBetDeducted * $rtpSiphonRate;
 
     $deltaBalance += $spinWin;
     $deltaPnl -= $spinWin; // House PNL inverse
 
-    // Memory Leveling (No Queries!)
+    // Memory Leveling
     $xpGain = floor($betAmount / 1000);
     $newXp = $freshUser['xp'] + $xpGain;
     $currentLevel = (int)$freshUser['level'];
@@ -346,7 +381,6 @@ try {
 
     $sessionWinStreak = ($spinWin > 0) ? (int)($machine['session_win_streak'] ?? 0) + 1 : ((!$isFreeSpin && !$bonusMode) ? 0 : (int)($machine['session_win_streak'] ?? 0));
     
-    // Smooth deterministic Free Spin state transition
     $newFreeSpins = $freeSpins > 0 ? $freeSpins - 1 + $freeSpinsEarned : $freeSpinsEarned;
     
     if ($bonusSpinsLeft > 0) {
@@ -357,12 +391,12 @@ try {
         $bonusMode = 'RB';
         $bonusSpinsLeft = 8;
     }
-    $lapsSinceBonus = ($bonusMode || $isGrandJackpot) ? 0 : ($machine['laps_since_bonus'] + 1);
+    $lapsSinceBonus = ($bonusMode || $isGrandJackpot) ? 0 : ((int)($machine['laps_since_bonus'] ?? 0) + 1);
 
     $pdo->prepare("UPDATE machines SET total_laps = total_laps + 1, total_payout = total_payout + ?, session_token = ?, free_spins = ?, bonus_mode = ?, bonus_spins_left = ?, laps_since_bonus = ?, session_spins = session_spins + 1, session_win_streak = ?, last_played_at = NOW() WHERE id = ?")
         ->execute([$spinWin, $clientToken, $newFreeSpins, $bonusMode, $bonusSpinsLeft, $lapsSinceBonus, $sessionWinStreak, $machineId]);
 
-    $logPayload = ['board' => $result, 'pf' => ['nonce' => $nonce, 'client_seed' => $clientSeed, 'server_seed_hash' => $serverSeedHash, 'spin_hash' => $spinHash], 'heat' => ['zone' => $heatZone, 'pct' => round($heatPct, 2)]];
+    $logPayload = ['board' => $result, 'pf' => ['nonce' => $nonce, 'client_seed' => $clientSeed, 'server_seed_hash' => $serverSeedHash, 'spin_hash' => $spinHash], 'heat' => ['zone' => $heatZone, 'pct' => round($heatPct, 2)], 'v7_math' => ['gjp_prob' => $gjpProbability, 'target_hit' => $targetHitRate]];
 
     try {
         $pdo->prepare("INSERT INTO game_logs (user_id, machine_id, bet, win, rtp_in, rtp_out, result, entropy_cache, reel_indices, xp_earned) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
@@ -415,6 +449,11 @@ try {
     elseif ($e->getCode() == 3) {
         $code = 'ERR_INSUFFICIENT_FUNDS';
         $status = 402;
+    }
+    // Custom handling for newly added strict CRITICAL exceptions
+    if (strpos($e->getMessage(), 'CRITICAL') !== false) {
+        $code = 'ERR_SYSTEM_UNCONFIGURED';
+        $status = 500;
     }
     sendError($code, $e->getMessage(), $status);
 }
