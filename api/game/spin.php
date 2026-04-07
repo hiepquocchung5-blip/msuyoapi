@@ -1,13 +1,13 @@
 <?php
 // ============================================================================
-// SUROPARA V7.8.0 - LEVIATHAN ALGORITHMIC GRID ENGINE (BONUS ENGINE)
+// SUROPARA V7.10.0 - LEVIATHAN ALGORITHMIC GRID ENGINE (DYNAMIC TEASER UPDATE)
 // ----------------------------------------------------------------------------
 // 1. Algorithmic Grid: 100% Math-driven 3x3 matrix via SpinHash Entropy.
 // 2. Strict Provably Fair: mt_rand() eradicated. All drops are deterministic.
-// 3. Hard GJP Ceiling: Absolute must-hit cap triggers enforced.
-// 4. Zero-Collision Paths: Accidental multi-line wins actively scrubbed.
-// 5. Precision RTP Governor: Smooth proportional hit-rate scaling (65-70% band).
-// 6. Bonus Engine (V7.8): Dynamic hit-rate & weight overrides for RB/HEAVEN modes.
+// 3. GJP Trigger Lock: Jackpot probability is 0% until 'trigger_amount' is hit.
+// 4. Dynamic Teaser Filtering: GJP symbols ONLY appear on reels if WARM/HOT.
+// 5. Zero-Collision Paths: Accidental multi-line wins actively scrubbed.
+// 6. Smooth RTP Governor: Feathered hit-rate scaling (Target ~70% band).
 // ============================================================================
 
 $allowedOrigin = "https://suropara.com";
@@ -213,7 +213,7 @@ try {
         $entropy[$i] = hexdec(substr(hash('sha256', $spinHash . $i), 0, 8)) / 4294967296;
     }
 
-    // --- PHASE 5: V7.8 MATHEMATICAL GJP ENGINE ---
+    // --- PHASE 5: V7.10 MATHEMATICAL GJP ENGINE (TRIGGER-LOCKED) ---
     $stmtJp = $pdo->prepare("SELECT current_amount, base_seed, trigger_amount, max_amount, contribution_rate FROM global_jackpots WHERE island_id = ? FOR UPDATE");
     $stmtJp->execute([$islandId]);
     $gjpData = $stmtJp->fetch(PDO::FETCH_ASSOC);
@@ -221,6 +221,7 @@ try {
     if (!$gjpData) throw new Exception("CRITICAL: GJP matrix unconfigured for Sector #$islandId.");
 
     $currentJackpot = (float)$gjpData['current_amount'];
+    $gjpTrigger = (float)$gjpData['trigger_amount']; // The Hot Trigger threshold
     $gjpMax = (float)$gjpData['max_amount']; 
     $gjpBase = (float)$gjpData['base_seed'];
     $gjpContribRate = (float)$gjpData['contribution_rate'];
@@ -235,30 +236,43 @@ try {
     }
 
     $isGrandJackpot = false;
-    $heatPct = min(100, max(0, (($currentJackpot - $gjpBase) / max(1, ($gjpMax - $gjpBase))) * 100));
-    $heatZone = 'COLD';
-    
     $gjpTargetRtp = $winRates['gjp_rtp'] / 100;
-    $gjpProbability = ($actualBetDeducted > 0) ? (($gjpTargetRtp * $betAmount) / max(1, $currentJackpot)) : 0;
+    $gjpProbability = 0;
+    $heatPct = 0;
+    $heatZone = 'COLD';
 
-    $burstVol = $winRates['volatility'];
+    // V7.10: Strict Mathematical Trigger Lock
     if ($currentJackpot >= $gjpMax) {
+        // Absolute Force Trigger
         $heatZone = 'MUST_HIT';
-        $isGrandJackpot = true; // Absolute force trigger when ceiling reached
-    } elseif ($heatPct >= 80.0) {
-        $heatZone = 'HOT';
-        $gjpProbability *= ($burstVol * 2.0);
-    } elseif ($heatPct >= 50.0) {
-        $heatZone = 'WARM';
-        $gjpProbability *= $burstVol;
+        $heatPct = 100.0;
+        $isGrandJackpot = true; 
+    } elseif ($currentJackpot >= $gjpTrigger) {
+        // GJP Unlocked: Calculate Heat & Probability
+        $heatPct = min(100, max(0, (($currentJackpot - $gjpTrigger) / max(1, ($gjpMax - $gjpTrigger))) * 100));
+        $gjpProbability = ($actualBetDeducted > 0) ? (($gjpTargetRtp * $betAmount) / max(1, $currentJackpot)) : 0;
+        $burstVol = $winRates['volatility'];
+
+        if ($heatPct >= 80.0) {
+            $heatZone = 'HOT';
+            $gjpProbability *= ($burstVol * 2.0);
+        } else {
+            $heatZone = 'WARM';
+            $gjpProbability *= $burstVol;
+        }
+    } else {
+        // GJP Locked: Mathematical zero probability before trigger
+        $heatZone = 'COLD';
+        $heatPct = 0.0;
+        $gjpProbability = 0;
     }
 
     // Trigger Roll (Anti-Farming: Disabled during Free Spins/Bonus)
-    if (!$isGrandJackpot && !$isFreeSpin && !$bonusMode && $actualBetDeducted > 0) {
+    if (!$isGrandJackpot && !$isFreeSpin && !$bonusMode && $actualBetDeducted > 0 && $gjpProbability > 0) {
         if ($entropy[3] <= $gjpProbability) $isGrandJackpot = true;
     }
 
-    // --- PHASE 6: V7.8 BONUS MECHANICS, PRECISION RTP GOVERNOR & GRID GENERATION ---
+    // --- PHASE 6: V7.10 DYNAMIC TEASER & GRID GENERATION ---
     $baseHitRate = $winRates['base_hit_rate'] / 100; 
     $targetTotalRtp = $winRates['base_hit_rate'] + $winRates['gjp_rtp'];
     $adjustedHitRate = $baseHitRate;
@@ -266,21 +280,21 @@ try {
     // Dynamic RTP Compensation Logic (Proportional Scaling)
     $currentMachineRtp = $machineTotalBetPre > 0 ? ($machineTotalPayoutPre / $machineTotalBetPre) * 100 : 0;
     
-    // V7.8: Bonus Mode Overrides (Bypasses standard RTP governor)
+    // Bonus Mode Overrides (Bypasses standard RTP governor)
     if ($bonusMode === 'HEAVEN') {
         $adjustedHitRate = 1.0; // 100% Hit Rate
     } elseif ($bonusMode === 'RB') {
         $adjustedHitRate = 0.85; // 85% Hit Rate
     } else {
-        // Standard Base Game Convergence Constraints (Requires 100k MMK volume)
+        // Standard Base Game Convergence Constraints (Requires 100k MMK volume buffer)
         if ($machineTotalBetPre > 100000) {
             $rtpDelta = $currentMachineRtp - $targetTotalRtp;
 
             if ($currentMachineRtp >= $winRates['max_rtp_cap']) {
-                $adjustedHitRate *= 0.50; // Emergency Circuit Breaker
+                $adjustedHitRate *= 0.50; // Emergency Circuit Breaker (Half hit rate)
             } else {
-                // Smooth scaling convergence (Max +/- 25% adjustment)
-                $correctionFactor = max(-0.25, min(0.25, ($rtpDelta * 0.05)));
+                // Smooth scaling convergence (Max +/- 15% adjustment for invisible steering)
+                $correctionFactor = max(-0.15, min(0.15, ($rtpDelta * 0.03)));
                 $adjustedHitRate *= (1 - $correctionFactor);
             }
         }
@@ -290,8 +304,16 @@ try {
     $isHit = ($entropy[4] <= $adjustedHitRate);
     
     $paylines = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 4, 8], [6, 4, 2]];
-    $availableSyms = [2, 3, 4, 5, 6, 7];
+    $standardSyms = [2, 3, 4, 5, 6, 7];
     $result = array_fill(0, 9, 0);
+
+    // V7.10 DYNAMIC TEASER FILTER: Only allow GJP symbol on the board if WARM or HOT
+    if ($heatZone === 'COLD') {
+        $fillerSyms = [2, 3, 4, 5, 6, 7];
+    } else {
+        $fillerSyms = [1, 2, 3, 4, 5, 6, 7]; // Allow 1s to tease the player
+    }
+    $fillerCount = count($fillerSyms);
 
     if ($isGrandJackpot) {
         $winLine = $paylines[(int)floor($entropy[0] * 5)];
@@ -300,7 +322,7 @@ try {
         $fillCursor = 5;
         for ($i = 0; $i < 9; $i++) {
             if ($result[$i] === 0) {
-                $result[$i] = $availableSyms[(int)floor($entropy[$fillCursor] * 6)];
+                $result[$i] = $fillerSyms[(int)floor($entropy[$fillCursor] * $fillerCount)];
                 $fillCursor++;
             }
         }
@@ -314,26 +336,25 @@ try {
                 
                 if ($result[$line[0]] === $result[$line[1]] && $result[$line[1]] === $result[$line[2]]) {
                     $accidental = true;
-                    $shift = (int)floor($entropy[14] * 5) + 1;
-                    $cIdx = array_search($result[$line[2]], $availableSyms);
-                    $newSym = $availableSyms[($cIdx + $shift) % 6];
-                    $result[$line[2]] = ($newSym === 1) ? $availableSyms[($cIdx + $shift + 1) % 6] : $newSym;
+                    $shift = (int)floor($entropy[14] * $fillerCount) + 1;
+                    $cIdx = array_search($result[$line[2]], $fillerSyms);
+                    $newSym = $fillerSyms[($cIdx + $shift) % $fillerCount];
+                    // Prevent shifting into another 1 if it wasn't the intended winline
+                    $result[$line[2]] = ($newSym === 1) ? $fillerSyms[($cIdx + $shift + 1) % $fillerCount] : $newSym;
                 }
             }
             if (++$repairPass > 10) break; 
         } while ($accidental);
 
     } elseif ($isHit) {
-        // V7.8 Mathematical Weighting (Dynamic based on mode)
+        // V7.10 Dynamic Weighting (Standard symbols only for normal wins)
+        $symWeights = [];
         if ($bonusMode === 'HEAVEN') {
-            // Only Premium Symbols (2: LOGO, 3: 7s, 4: Melon)
-            $symWeights = [2 => 40, 3 => 40, 4 => 20, 5 => 0, 6 => 0, 7 => 0];
+            $symWeights = [2 => 40, 3 => 40, 4 => 20, 5 => 0, 6 => 0, 7 => 0]; // Premium Only
         } elseif ($bonusMode === 'RB') {
-            // Elevated Mid-Tier Symbols, block out Replays
-            $symWeights = [2 => 5, 3 => 15, 4 => 40, 5 => 30, 6 => 10, 7 => 0]; 
+            $symWeights = [2 => 5, 3 => 15, 4 => 40, 5 => 30, 6 => 10, 7 => 0]; // Mid Tier, No Replays
         } else {
-            // Standard ~7.18x average hit multiplier
-            $symWeights = [2 => 5, 3 => 10, 4 => 20, 5 => 20, 6 => 30, 7 => 15];
+            $symWeights = [2 => 2, 3 => 5, 4 => 5, 5 => 3, 6 => 350, 7 => 635]; 
         }
 
         $totalWeight = array_sum($symWeights);
@@ -341,9 +362,9 @@ try {
         $winSym = 7;
         $sum = 0;
         foreach ($symWeights as $s => $w) {
-            if ($w === 0) continue; // Skip 0-weighted symbols entirely
+            if ($w === 0) continue;
             $sum += $w;
-            if ($randW <= $sum) { 
+            if ($randW <= sum) { 
                 $winSym = (int)$s;
                 break; 
             }
@@ -355,7 +376,7 @@ try {
         $fillCursor = 5;
         for ($i = 0; $i < 9; $i++) {
             if ($result[$i] === 0) {
-                $filler = $availableSyms[(int)floor($entropy[$fillCursor] * 6)];
+                $filler = $fillerSyms[(int)floor($entropy[$fillCursor] * $fillerCount)];
                 $result[$i] = ($filler === $winSym) ? ($filler === 7 ? 2 : $filler + 1) : $filler;
                 $fillCursor++;
             }
@@ -368,20 +389,28 @@ try {
             foreach ($paylines as $line) {
                 if ($line === $winLine) continue; 
                 
+                // Scrub standard accidental wins
                 if ($result[$line[0]] === $result[$line[1]] && $result[$line[1]] === $result[$line[2]]) {
                     $accidental = true;
-                    $shift = (int)floor($entropy[14] * 5) + 1;
-                    $cIdx = array_search($result[$line[2]], $availableSyms);
-                    $newSym = $availableSyms[($cIdx + $shift) % 6];
-                    $result[$line[2]] = ($newSym === $winSym) ? $availableSyms[($cIdx + $shift + 1) % 6] : $newSym;
+                    $shift = (int)floor($entropy[14] * $fillerCount) + 1;
+                    $cIdx = array_search($result[$line[2]], $fillerSyms);
+                    $newSym = $fillerSyms[($cIdx + $shift) % $fillerCount];
+                    // Prevent creating the win symbol or accidentally forming a 1-1-1
+                    if ($newSym === $winSym || ($newSym === 1 && $result[$line[0]] === 1 && $result[$line[1]] === 1)) {
+                        $newSym = $fillerSyms[($cIdx + $shift + 1) % $fillerCount];
+                    }
+                    $result[$line[2]] = $newSym;
                 }
             }
             if (++$repairPass > 10) break; 
         } while ($accidental);
 
     } else {
+        // Zero Collision Generation
+        $fillCursor = 5;
         for ($i = 0; $i < 9; $i++) {
-            $result[$i] = $availableSyms[(int)floor($entropy[5 + $i] * 6)];
+            $result[$i] = $fillerSyms[(int)floor($entropy[$fillCursor] * $fillerCount)];
+            $fillCursor++;
         }
         
         $accidental = false;
@@ -391,9 +420,15 @@ try {
             foreach ($paylines as $line) {
                 if ($result[$line[0]] === $result[$line[1]] && $result[$line[1]] === $result[$line[2]]) {
                     $accidental = true;
-                    $shift = (int)floor($entropy[14] * 5) + 1;
-                    $currentIndex = array_search($result[$line[2]], $availableSyms);
-                    $result[$line[2]] = $availableSyms[($currentIndex + $shift) % 6];
+                    $shift = (int)floor($entropy[14] * $fillerCount) + 1;
+                    $currentIndex = array_search($result[$line[2]], $fillerSyms);
+                    $newSym = $fillerSyms[($currentIndex + $shift) % $fillerCount];
+                    
+                    // Extra strict rule: NEVER allow 1-1-1 on the board unless $isGrandJackpot is true
+                    if ($newSym === 1 && $result[$line[0]] === 1 && $result[$line[1]] === 1) {
+                        $newSym = $fillerSyms[($currentIndex + $shift + 1) % $fillerCount];
+                    }
+                    $result[$line[2]] = $newSym;
                 }
             }
             if (++$repairPass > 10) break; 
@@ -424,6 +459,7 @@ try {
                 $spinWin += $betAmount * $symMultipliers[$s1];
             }
         } else {
+            // Near Miss Evaluation (Teaser)
             if ($s1 === $s2 && in_array($s1, [1, 2, 3])) {
                 $isTeaser = true;
                 if ($idx === 3 || $idx === 4) $isReachEye = true;
@@ -478,17 +514,11 @@ try {
     $sessionWinStreak = ($spinWin > 0) ? (int)($machine['session_win_streak'] ?? 0) + 1 : ((!$isFreeSpin && !$bonusMode) ? 0 : (int)($machine['session_win_streak'] ?? 0));
     $newFreeSpins = $freeSpins > 0 ? $freeSpins - 1 + $freeSpinsEarned : $freeSpinsEarned;
     
-    // Process Bonus Counters
     if ($bonusSpinsLeft > 0) {
         $bonusSpinsLeft--;
-        if ($bonusSpinsLeft <= 0 && $bonusMode !== 'HEAVEN') {
-            $bonusMode = null; // Bonus complete
-        }
+        if ($bonusSpinsLeft <= 0 && $bonusMode !== 'HEAVEN') $bonusMode = null;
     }
-    if ($bonusModeTriggered) { 
-        $bonusMode = 'RB'; 
-        $bonusSpinsLeft = 8; // Grant 8 free boosted spins
-    }
+    if ($bonusModeTriggered) { $bonusMode = 'RB'; $bonusSpinsLeft = 8; }
     
     $lapsSinceBonus = ($bonusMode || $isGrandJackpot) ? 0 : ((int)($machine['laps_since_bonus'] ?? 0) + 1);
 
@@ -553,7 +583,7 @@ try {
         'provably_fair' => ['client_seed' => $clientSeed, 'server_seed_hash' => $serverSeedHash, 'previous_server_seed' => $previousSeed, 'server_seed_reveal' => $revealedSeed, 'spin_hash' => $spinHash, 'nonce' => $nonce],
         'gjp_heat' => ['zone' => $heatZone, 'pct' => round($heatPct, 2)],
         
-        // V7.8: Live Dynamic RTP Telemetry
+        // V7.10: Live Dynamic RTP Telemetry
         'telemetry' => [
             'target_rtp' => round($targetTotalRtp, 2),
             'actual_rtp' => round($actualMachineRtp, 2),
