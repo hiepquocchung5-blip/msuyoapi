@@ -1,12 +1,13 @@
 <?php
 // ============================================================================
-// SUROPARA V7.7.0 - LEVIATHAN ALGORITHMIC GRID ENGINE (STRICT PF MODE)
+// SUROPARA V7.8.0 - LEVIATHAN ALGORITHMIC GRID ENGINE (BONUS ENGINE)
 // ----------------------------------------------------------------------------
 // 1. Algorithmic Grid: 100% Math-driven 3x3 matrix via SpinHash Entropy.
 // 2. Strict Provably Fair: mt_rand() eradicated. All drops are deterministic.
 // 3. Hard GJP Ceiling: Absolute must-hit cap triggers enforced.
 // 4. Zero-Collision Paths: Accidental multi-line wins actively scrubbed.
 // 5. Precision RTP Governor: Smooth proportional hit-rate scaling (65-70% band).
+// 6. Bonus Engine (V7.8): Dynamic hit-rate & weight overrides for RB/HEAVEN modes.
 // ============================================================================
 
 $allowedOrigin = "https://suropara.com";
@@ -212,7 +213,7 @@ try {
         $entropy[$i] = hexdec(substr(hash('sha256', $spinHash . $i), 0, 8)) / 4294967296;
     }
 
-    // --- PHASE 5: V7.7 MATHEMATICAL GJP ENGINE ---
+    // --- PHASE 5: V7.8 MATHEMATICAL GJP ENGINE ---
     $stmtJp = $pdo->prepare("SELECT current_amount, base_seed, trigger_amount, max_amount, contribution_rate FROM global_jackpots WHERE island_id = ? FOR UPDATE");
     $stmtJp->execute([$islandId]);
     $gjpData = $stmtJp->fetch(PDO::FETCH_ASSOC);
@@ -252,12 +253,12 @@ try {
         $gjpProbability *= $burstVol;
     }
 
-    // Trigger Roll (Anti-Farming: Disabled during Free Spins)
+    // Trigger Roll (Anti-Farming: Disabled during Free Spins/Bonus)
     if (!$isGrandJackpot && !$isFreeSpin && !$bonusMode && $actualBetDeducted > 0) {
         if ($entropy[3] <= $gjpProbability) $isGrandJackpot = true;
     }
 
-    // --- PHASE 6: V7.7 PRECISION RTP GOVERNOR & GRID GENERATION ---
+    // --- PHASE 6: V7.8 BONUS MECHANICS, PRECISION RTP GOVERNOR & GRID GENERATION ---
     $baseHitRate = $winRates['base_hit_rate'] / 100; 
     $targetTotalRtp = $winRates['base_hit_rate'] + $winRates['gjp_rtp'];
     $adjustedHitRate = $baseHitRate;
@@ -265,17 +266,23 @@ try {
     // Dynamic RTP Compensation Logic (Proportional Scaling)
     $currentMachineRtp = $machineTotalBetPre > 0 ? ($machineTotalPayoutPre / $machineTotalBetPre) * 100 : 0;
     
-    // Only apply convergence constraints if machine has processed a minimal volume (100k MMK)
-    if ($machineTotalBetPre > 100000) {
-        $rtpDelta = $currentMachineRtp - $targetTotalRtp;
+    // V7.8: Bonus Mode Overrides (Bypasses standard RTP governor)
+    if ($bonusMode === 'HEAVEN') {
+        $adjustedHitRate = 1.0; // 100% Hit Rate
+    } elseif ($bonusMode === 'RB') {
+        $adjustedHitRate = 0.85; // 85% Hit Rate
+    } else {
+        // Standard Base Game Convergence Constraints (Requires 100k MMK volume)
+        if ($machineTotalBetPre > 100000) {
+            $rtpDelta = $currentMachineRtp - $targetTotalRtp;
 
-        if ($currentMachineRtp >= $winRates['max_rtp_cap']) {
-            $adjustedHitRate *= 0.50; // Emergency Circuit Breaker
-        } else {
-            // V7.7 Proportional Correction: Smooth scaling convergence (Max +/- 25% adjustment)
-            // Example: If RTP is +5% over target, correction factor is +25%, lowering hit rate by 25%.
-            $correctionFactor = max(-0.25, min(0.25, ($rtpDelta * 0.05)));
-            $adjustedHitRate *= (1 - $correctionFactor);
+            if ($currentMachineRtp >= $winRates['max_rtp_cap']) {
+                $adjustedHitRate *= 0.50; // Emergency Circuit Breaker
+            } else {
+                // Smooth scaling convergence (Max +/- 25% adjustment)
+                $correctionFactor = max(-0.25, min(0.25, ($rtpDelta * 0.05)));
+                $adjustedHitRate *= (1 - $correctionFactor);
+            }
         }
     }
     
@@ -317,13 +324,24 @@ try {
         } while ($accidental);
 
     } elseif ($isHit) {
-        // Mathematical Weighting for ~7.18x average hit multiplier
-        $symWeights = [2 => 5, 3 => 10, 4 => 20, 5 => 20, 6 => 30, 7 => 15];
+        // V7.8 Mathematical Weighting (Dynamic based on mode)
+        if ($bonusMode === 'HEAVEN') {
+            // Only Premium Symbols (2: LOGO, 3: 7s, 4: Melon)
+            $symWeights = [2 => 40, 3 => 40, 4 => 20, 5 => 0, 6 => 0, 7 => 0];
+        } elseif ($bonusMode === 'RB') {
+            // Elevated Mid-Tier Symbols, block out Replays
+            $symWeights = [2 => 5, 3 => 15, 4 => 40, 5 => 30, 6 => 10, 7 => 0]; 
+        } else {
+            // Standard ~7.18x average hit multiplier
+            $symWeights = [2 => 5, 3 => 10, 4 => 20, 5 => 20, 6 => 30, 7 => 15];
+        }
+
         $totalWeight = array_sum($symWeights);
         $randW = $entropy[1] * $totalWeight;
         $winSym = 7;
         $sum = 0;
         foreach ($symWeights as $s => $w) {
+            if ($w === 0) continue; // Skip 0-weighted symbols entirely
             $sum += $w;
             if ($randW <= $sum) { 
                 $winSym = (int)$s;
@@ -399,6 +417,7 @@ try {
             } elseif ($s1 === 7) {
                 $freeSpinsEarned = 1; 
             } elseif ($s1 === 3 && !$bonusMode) {
+                // 7s trigger bonus mode if not already in one
                 $bonusModeTriggered = true;
                 $spinWin += $betAmount * $symMultipliers[$s1];
             } else {
@@ -459,11 +478,17 @@ try {
     $sessionWinStreak = ($spinWin > 0) ? (int)($machine['session_win_streak'] ?? 0) + 1 : ((!$isFreeSpin && !$bonusMode) ? 0 : (int)($machine['session_win_streak'] ?? 0));
     $newFreeSpins = $freeSpins > 0 ? $freeSpins - 1 + $freeSpinsEarned : $freeSpinsEarned;
     
+    // Process Bonus Counters
     if ($bonusSpinsLeft > 0) {
         $bonusSpinsLeft--;
-        if ($bonusSpinsLeft <= 0 && $bonusMode !== 'HEAVEN') $bonusMode = null;
+        if ($bonusSpinsLeft <= 0 && $bonusMode !== 'HEAVEN') {
+            $bonusMode = null; // Bonus complete
+        }
     }
-    if ($bonusModeTriggered) { $bonusMode = 'RB'; $bonusSpinsLeft = 8; }
+    if ($bonusModeTriggered) { 
+        $bonusMode = 'RB'; 
+        $bonusSpinsLeft = 8; // Grant 8 free boosted spins
+    }
     
     $lapsSinceBonus = ($bonusMode || $isGrandJackpot) ? 0 : ((int)($machine['laps_since_bonus'] ?? 0) + 1);
 
@@ -528,7 +553,7 @@ try {
         'provably_fair' => ['client_seed' => $clientSeed, 'server_seed_hash' => $serverSeedHash, 'previous_server_seed' => $previousSeed, 'server_seed_reveal' => $revealedSeed, 'spin_hash' => $spinHash, 'nonce' => $nonce],
         'gjp_heat' => ['zone' => $heatZone, 'pct' => round($heatPct, 2)],
         
-        // V7.7: Live Dynamic RTP Telemetry
+        // V7.8: Live Dynamic RTP Telemetry
         'telemetry' => [
             'target_rtp' => round($targetTotalRtp, 2),
             'actual_rtp' => round($actualMachineRtp, 2),
