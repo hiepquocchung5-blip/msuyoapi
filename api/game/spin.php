@@ -1,12 +1,12 @@
 <?php
 // ============================================================================
-// SUROPARA V7.6.1 - LEVIATHAN DYNAMIC CONVERGENCE ENGINE (BUGFIX)
+// SUROPARA V7.7.0 - LEVIATHAN ALGORITHMIC GRID ENGINE (STRICT PF MODE)
 // ----------------------------------------------------------------------------
 // 1. Algorithmic Grid: 100% Math-driven 3x3 matrix via SpinHash Entropy.
 // 2. Strict Provably Fair: mt_rand() eradicated. All drops are deterministic.
-// 3. Dynamic RTP Compensation: Micro-adjusts hit rate based on live PNL.
-// 4. Emergency Throttle: Slashes hit rate by 50% if Max Cap is breached.
-// 5. Bugfix: Eradicated JS parseInt() syntax leak in organic hit selection.
+// 3. Hard GJP Ceiling: Absolute must-hit cap triggers enforced.
+// 4. Zero-Collision Paths: Accidental multi-line wins actively scrubbed.
+// 5. Precision RTP Governor: Smooth proportional hit-rate scaling (65-70% band).
 // ============================================================================
 
 $allowedOrigin = "https://suropara.com";
@@ -129,7 +129,7 @@ try {
         if (!$db) throw new Exception("CRITICAL: Payout matrix missing for Sector #$islandId.");
         
         return [
-            1 => 0.0, // GJP pool is sym 1's sole payout
+            1 => 0.0, // Strict Enforcement: GJP pool is sym 1's sole payout
             2 => (float)$db['sym_2_mult'], 3 => (float)$db['sym_3_mult'], 
             4 => (float)$db['sym_4_mult'], 5 => (float)$db['sym_5_mult'], 
             6 => (float)$db['sym_6_mult'], 7 => (float)$db['sym_7_mult']
@@ -175,7 +175,7 @@ try {
     $freeSpins = (int)($machine['free_spins'] ?? 0);
     $sessionSpins = (int)($machine['session_spins'] ?? 0);
     
-    // Live Pre-Spin Telemetry for V7.6 Dynamic Convergence
+    // Live Pre-Spin Telemetry for Dynamic Convergence
     $machineTotalBetPre = (float)($machine['total_bet'] ?? 0);
     $machineTotalPayoutPre = (float)($machine['total_payout'] ?? 0);
 
@@ -212,7 +212,7 @@ try {
         $entropy[$i] = hexdec(substr(hash('sha256', $spinHash . $i), 0, 8)) / 4294967296;
     }
 
-    // --- PHASE 5: V7.6.1 MATHEMATICAL GJP ENGINE ---
+    // --- PHASE 5: V7.7 MATHEMATICAL GJP ENGINE ---
     $stmtJp = $pdo->prepare("SELECT current_amount, base_seed, trigger_amount, max_amount, contribution_rate FROM global_jackpots WHERE island_id = ? FOR UPDATE");
     $stmtJp->execute([$islandId]);
     $gjpData = $stmtJp->fetch(PDO::FETCH_ASSOC);
@@ -224,11 +224,11 @@ try {
     $gjpBase = (float)$gjpData['base_seed'];
     $gjpContribRate = (float)$gjpData['contribution_rate'];
 
-    // Siphon Pot
+    // Siphon Pot (Free spins make zero contribution)
     if ($actualBetDeducted > 0) {
         $currentJackpot += ($actualBetDeducted * $gjpContribRate);
         if ($currentJackpot >= $gjpMax) {
-            $currentJackpot = $gjpMax; // Hard Cap
+            $currentJackpot = $gjpMax; // Hard Cap Restored
         }
         $pdo->prepare("UPDATE global_jackpots SET current_amount = ? WHERE island_id = ?")->execute([$currentJackpot, $islandId]);
     }
@@ -243,7 +243,7 @@ try {
     $burstVol = $winRates['volatility'];
     if ($currentJackpot >= $gjpMax) {
         $heatZone = 'MUST_HIT';
-        $isGrandJackpot = true; // Absolute force
+        $isGrandJackpot = true; // Absolute force trigger when ceiling reached
     } elseif ($heatPct >= 80.0) {
         $heatZone = 'HOT';
         $gjpProbability *= ($burstVol * 2.0);
@@ -252,16 +252,17 @@ try {
         $gjpProbability *= $burstVol;
     }
 
+    // Trigger Roll (Anti-Farming: Disabled during Free Spins)
     if (!$isGrandJackpot && !$isFreeSpin && !$bonusMode && $actualBetDeducted > 0) {
         if ($entropy[3] <= $gjpProbability) $isGrandJackpot = true;
     }
 
-    // --- PHASE 6: V7.6.1 DYNAMIC RTP CONVERGENCE & GRID GENERATION ---
+    // --- PHASE 6: V7.7 PRECISION RTP GOVERNOR & GRID GENERATION ---
     $baseHitRate = $winRates['base_hit_rate'] / 100; 
     $targetTotalRtp = $winRates['base_hit_rate'] + $winRates['gjp_rtp'];
     $adjustedHitRate = $baseHitRate;
 
-    // V7.6 Dynamic RTP Compensation Logic
+    // Dynamic RTP Compensation Logic (Proportional Scaling)
     $currentMachineRtp = $machineTotalBetPre > 0 ? ($machineTotalPayoutPre / $machineTotalBetPre) * 100 : 0;
     
     // Only apply convergence constraints if machine has processed a minimal volume (100k MMK)
@@ -270,12 +271,11 @@ try {
 
         if ($currentMachineRtp >= $winRates['max_rtp_cap']) {
             $adjustedHitRate *= 0.50; // Emergency Circuit Breaker
-        } elseif ($rtpDelta > 3) {
-            $penalty = min(0.20, ($rtpDelta / 40)); 
-            $adjustedHitRate *= (1 - $penalty);
-        } elseif ($rtpDelta < -3) {
-            $bonus = min(0.20, (abs($rtpDelta) / 40));
-            $adjustedHitRate *= (1 + $bonus);
+        } else {
+            // V7.7 Proportional Correction: Smooth scaling convergence (Max +/- 25% adjustment)
+            // Example: If RTP is +5% over target, correction factor is +25%, lowering hit rate by 25%.
+            $correctionFactor = max(-0.25, min(0.25, ($rtpDelta * 0.05)));
+            $adjustedHitRate *= (1 - $correctionFactor);
         }
     }
     
@@ -317,16 +317,16 @@ try {
         } while ($accidental);
 
     } elseif ($isHit) {
-        // V7.5.1 Mathematical Weighting for ~0.885x average hit
-        $symWeights = [2 => 2, 3 => 5, 4 => 5, 5 => 3, 6 => 350, 7 => 635];
-        $totalWeight = 1000;
+        // Mathematical Weighting for ~7.18x average hit multiplier
+        $symWeights = [2 => 5, 3 => 10, 4 => 20, 5 => 20, 6 => 30, 7 => 15];
+        $totalWeight = array_sum($symWeights);
         $randW = $entropy[1] * $totalWeight;
         $winSym = 7;
         $sum = 0;
         foreach ($symWeights as $s => $w) {
             $sum += $w;
             if ($randW <= $sum) { 
-                $winSym = (int)$s; // BUGFIX: Replaced JS parseInt with PHP (int)
+                $winSym = (int)$s;
                 break; 
             }
         }
@@ -437,6 +437,7 @@ try {
     $totalLevelReward = 0;
     $levelUpData = [];
 
+    // Iterates multiple levels if user skipped ahead
     foreach ($levelConfigs as $lvl) {
         if ($lvl['level'] > $currentLevel && $newXp >= $lvl['xp_required']) {
             $currentLevel = $lvl['level'];
@@ -527,7 +528,7 @@ try {
         'provably_fair' => ['client_seed' => $clientSeed, 'server_seed_hash' => $serverSeedHash, 'previous_server_seed' => $previousSeed, 'server_seed_reveal' => $revealedSeed, 'spin_hash' => $spinHash, 'nonce' => $nonce],
         'gjp_heat' => ['zone' => $heatZone, 'pct' => round($heatPct, 2)],
         
-        // V7.6: Live Dynamic RTP Telemetry
+        // V7.7: Live Dynamic RTP Telemetry
         'telemetry' => [
             'target_rtp' => round($targetTotalRtp, 2),
             'actual_rtp' => round($actualMachineRtp, 2),
