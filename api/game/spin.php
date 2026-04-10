@@ -14,7 +14,7 @@ $allowedOrigins = [
     'https://suropara.com',
     'https://www.suropara.com',
     // 'https://m.suropara.com',
-    'https://slopanel.space:9559'
+    'https://www.slopanel.space'
 ];
 
 $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
