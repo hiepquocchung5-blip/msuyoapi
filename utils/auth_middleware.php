@@ -7,7 +7,7 @@
 
 // --- 1. STRICT CORS & HEADERS ---
 // Locked exclusively to the main production domain
-header("Access-Control-Allow-Origin: https://suropara.com");
+header("Access-Control-Allow-Origin: https://suropara.com https://www.suropara.com https://www.slopanel.space");
 header("Access-Control-Allow-Credentials: true");
 header("Content-Type: application/json; charset=UTF-8");
 header("Access-Control-Allow-Methods: POST, GET, OPTIONS");
